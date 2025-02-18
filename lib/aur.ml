@@ -56,10 +56,7 @@ let fetch_deps pkgname =
     let query_aur query =
         let ua_header = Some (Header.init_with "User-Agent" "oaur") in
         Client.get ?headers:ua_header query
-        >>= fun (_,body) ->
-            Cohttp_lwt.Body.to_string body
-        >|= fun body ->
-            body
+        >>= fun (_,body) -> Cohttp_lwt.Body.to_string body
     in
     let extract_results body =
         let open Yojson.Basic.Util in
@@ -87,15 +84,12 @@ let check_if_aur pkgname =
         let aururl = Uri.of_string aur_location in
         let path = "/rpc" ^ "/v" ^ (string_of_int aur_rpc_ver) ^ "/info" in
         let url = Uri.with_path aururl path in
-        let query = Uri.add_query_param url ("arg[]", [pkgname]) in
-        query
+        Uri.add_query_param url ("arg[]", [pkgname])
     in
     let check_rpc query =
         let ua_header = Some (Header.init_with "User-Agent" "oaur") in
         Client.get ?headers:ua_header query
-        >>= fun(_,body) ->
-            Cohttp_lwt.Body.to_string body
-        >|= fun body -> body
+        >>= fun(_,body) -> Cohttp_lwt.Body.to_string body
     in
     let extract_result body =
         let open Yojson.Basic.Util in
