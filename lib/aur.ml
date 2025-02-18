@@ -2,18 +2,12 @@ open Lwt
 open Cohttp
 open Cohttp_lwt_unix
 
+(* TODO: check how alad installs pacman deps *)
+
 let aur_location = "https://aur.archlinux.org"
 let aur_rpc_ver = 5
 
 
-(* TODO: check how alad installs pacman deps *)
-(* TODO: install web cache *)
-let search_aur query = 
-    let ua_header = Some (Header.init_with "User-Agent" "oaur") in
-    Client.get ?headers:ua_header query >>= fun (_, body) ->
-        Cohttp_lwt.Body.to_string body >|= fun body ->
-        (* Printf.eprintf "%s\n" body; *)
-        body
 
 let display_search_results body = 
     let open Yojson.Basic in 
@@ -40,20 +34,37 @@ let search term  =
         let path = "/rpc" ^ "/v" ^ (string_of_int aur_rpc_ver) ^ "/search/" ^ term in
         Uri.with_path aururl path
     in
+    let search_aur query = 
+        let ua_header = Some (Header.init_with "User-Agent" "oaur") in
+        Client.get ?headers:ua_header query >>= fun (_, body) ->
+            Cohttp_lwt.Body.to_string body >|= fun body ->
+            (* Printf.eprintf "%s\n" body; *)
+            body
+    in
     build_query term |> search_aur >|= fun body -> display_search_results body
 
 let fetch_deps pkgname = 
-    let aururl = Uri.of_string aur_location in
-    let path = "/rpc" ^ "/v" ^ (string_of_int aur_rpc_ver) ^ "/info" in
-    let url = Uri.with_path aururl path in
-    let query = Uri.add_query_param url ("arg[]", [pkgname]) in
-    let ua_header = Some (Header.init_with "User-Agent" "oaur") in
-    Client.get ?headers:ua_header query >>= fun (_,body) ->
-        Cohttp_lwt.Body.to_string body >|= fun body ->
-            let open Yojson.Basic.Util in
-            Yojson.Basic.from_string body 
-               |> member "results" |> to_list |> List.hd 
-               |> member "Depends" |> to_list |> List.map to_string
+    let build_query pkgname = 
+        let aururl = Uri.of_string aur_location in
+        let path = "/rpc" ^ "/v" ^ (string_of_int aur_rpc_ver) ^ "/info" in
+        let url = Uri.with_path aururl path in
+        Uri.add_query_param url ("arg[]", [pkgname])
+    in
+    let query_aur query =
+        let ua_header = Some (Header.init_with "User-Agent" "oaur") in
+        Client.get ?headers:ua_header query 
+        >>= fun (_,body) ->
+            Cohttp_lwt.Body.to_string body 
+        >|= fun body -> 
+            body
+    in
+    let extract_results body = 
+        let open Yojson.Basic.Util in
+        Yojson.Basic.from_string body 
+           |> member "results" |> to_list |> List.hd 
+           |> member "Depends" |> to_list |> List.map to_string
+    in
+    build_query pkgname |> query_aur >|= fun body -> extract_results body
 
 
 
