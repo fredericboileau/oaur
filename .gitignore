@@ -1,0 +1,10 @@
+_build
+bin/_build
+logs
+*.o
+*.d
+*.a
+*.swp
+*.hi
+*.cmd
+*.out

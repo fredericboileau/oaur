@@ -1,0 +1,8 @@
+(executable
+ (public_name oaur)
+ (name main)
+ (libraries aur)
+ (preprocess (pps ppx_jane lwt_ppx)))
+(env
+  (dev
+    (flags (:standard -warn-error -A))))
