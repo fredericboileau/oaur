@@ -6,8 +6,7 @@ open Cohttp_lwt_unix
 
 let aur_location = "https://aur.archlinux.org"
 let aur_rpc_ver = 5
-
-
+let ua_header = Header.init_with "User-Agent" "oaur"
 
 
 let search term  =
@@ -17,13 +16,8 @@ let search term  =
         Uri.with_path aururl path
     in
     let search_aur query =
-        let ua_header = Some (Header.init_with "User-Agent" "oaur") in
-        Client.get ?headers:ua_header query
-        >>= fun (_, body) ->
-            Cohttp_lwt.Body.to_string body
-        >|= fun body ->
-            (* Printf.eprintf "%s\n" body; *)
-            body
+        Client.get ?headers:(Some ua_header) query
+        >>= fun (_, body) -> Cohttp_lwt.Body.to_string body
     in
     let display_search_results body =
         let open Yojson.Basic in
@@ -54,8 +48,7 @@ let fetch_deps pkgname =
         Uri.add_query_param url ("arg[]", [pkgname])
     in
     let query_aur query =
-        let ua_header = Some (Header.init_with "User-Agent" "oaur") in
-        Client.get ?headers:ua_header query
+        Client.get ?headers:(Some ua_header) query
         >>= fun (_,body) -> Cohttp_lwt.Body.to_string body
     in
     let extract_results body =
@@ -68,15 +61,15 @@ let fetch_deps pkgname =
 
 
 
-(* wrap this in tree like structure *)
+(* TODO wrap this in tree like structure *)
 type check_if_repo = { pkgname: string; status: Unix.process_status }
 type classify_deps = { repo: string list; aur: string list; other: check_if_repo list }
 
 
 let check_if_repo pkgname =
     let command pkgname = ("pacman", [|"pacman";"-Sqi"; pkgname|]) in
-    Lwt_process.exec ~stdout:`Dev_null (command pkgname) >|= fun p ->
-        {pkgname; status = p}
+    Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null (command pkgname) 
+    >|= fun p -> { pkgname; status = p }
 
 
 let check_if_aur pkgname =
@@ -87,8 +80,7 @@ let check_if_aur pkgname =
         Uri.add_query_param url ("arg[]", [pkgname])
     in
     let check_rpc query =
-        let ua_header = Some (Header.init_with "User-Agent" "oaur") in
-        Client.get ?headers:ua_header query
+        Client.get ?headers:(Some ua_header) query
         >>= fun(_,body) -> Cohttp_lwt.Body.to_string body
     in
     let extract_result body =
