@@ -5,11 +5,11 @@
 (generate_opam_files true)
 
 (source
- (github username/reponame))
+ (github fredericboileau/oaur))
 
-(authors "Author Name")
+(authors "Frederic Boileau")
 
-(maintainers "Maintainer Name")
+(maintainers "Frederic Boileau")
 
 (license LICENSE)
 
@@ -17,8 +17,8 @@
 
 (package
  (name oaur)
- (synopsis "A short synopsis")
- (description "A longer description")
+ (synopsis "Archlinux User Repository helper")
+ (description "Rewrite of aurutils functionalities in ocaml")
  (depends async ocaml dune core 
           core_unix uri cohttp-lwt-unix atdgen
           ocolor yojson)
