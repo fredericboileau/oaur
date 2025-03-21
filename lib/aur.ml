@@ -126,20 +126,46 @@ let depends pkgname =
     Lwt.return()
 
 
-let exec_exn ~stdout ~stderr command = 
-    Lwt_process.exec ~stdout:stdout ~stderr:stderr command
+exception SubExn of string
+let fetch_exn pkgname = 
+    let pkglocation = aur_location ^ "/" ^ pkgname in
+    let command = ("git", [|"git";"ls-remote"; "--exit-code"; pkgname|]) in
+    Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null command
     >>= fun p -> match p with
-    | Unix.WEXITED 0 -> Lwt.return()
-    | Unix.WEXITED _ -> raise (Failure "Pkg does not exist")
-    | Unix.WSIGNALED _ | Unix.WSTOPPED  _ -> 
-            raise (Failure "Process got signaled/stopped")
+        | Unix.WEXITED 0 -> Lwt.return()
+        | Unix.WEXITED _ -> raise (
+            SubExn (Printf.sprintf "Pkg %s is not in AUR\n" pkgname))
+        | Unix.WSIGNALED _ | Unix.WSTOPPED _ -> raise (Failure "Subprocess error")
+    >>= fun () -> 
+        let command = ("git", [|"git"; "clone"; pkglocation|]) in
+        Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null command
+    >>= fun p -> match p with
+        | Unix.WEXITED 0 -> Lwt.return()
+        | _ -> raise (SubExn (Printf.sprintf "Could not clone %s" pkgname))
+
 
 let fetch pkgname = 
-    let command = (
-        "git", 
-        [|"git";"ls-remote"; "--exit-code"; aur_location ^ "/" ^ pkgname|]
-    ) in
-    exec_exn ~stdout:`Dev_null ~stderr:`Dev_null command
+    try fetch_exn pkgname 
+    with SubExn msg -> Printf.printf "Error: %s" msg; Lwt.return()
+
+(* let exec_exn ~stdout ~stderr command =  *)
+(*     Lwt_process.exec ~stdout:stdout ~stderr:stderr command *)
+(*     >>= fun p -> match p with *)
+(*     | Unix.WEXITED 0 -> Lwt.return() *)
+(*     | Unix.WEXITED _ -> raise (Failure "Pkg does not exist") *)
+(*     | Unix.WSIGNALED _ | Unix.WSTOPPED  _ ->  *)
+(*             raise (Failure "Process got signaled/stopped") *)
+(**)
+(* let fetch pkgname =  *)
+    (* let command = ( *)
+    (*     "git",  *)
+    (*     [|"git";"ls-remote"; "--exit-code"; aur_location ^ "/" ^ pkgname|] *)
+    (* ) in *)
+(*     exec_exn ~stdout:`Dev_null ~stderr:`Dev_null command; *)
+(*     let command = ( *)
+(*         "git", *)
+(*         [|"git"; "clone" *)
+(*     exec_exn ~stdout:`Dev_null ~stderr:`Dev_null *)
 
 
 
