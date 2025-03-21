@@ -124,3 +124,22 @@ let depends pkgname =
     Printf.printf "other pkgs: \n";
     List.iter (fun r -> Printf.printf "  %s\n" r.pkgname) classified.other;
     Lwt.return()
+
+
+let exec_exn ~stdout ~stderr command = 
+    Lwt_process.exec ~stdout:stdout ~stderr:stderr command
+    >>= fun p -> match p with
+    | Unix.WEXITED 0 -> Lwt.return()
+    | Unix.WEXITED _ -> raise (Failure "Pkg does not exist")
+    | Unix.WSIGNALED _ | Unix.WSTOPPED  _ -> 
+            raise (Failure "Process got signaled/stopped")
+
+let fetch pkgname = 
+    let command = (
+        "git", 
+        [|"git";"ls-remote"; "--exit-code"; aur_location ^ "/" ^ pkgname|]
+    ) in
+    exec_exn ~stdout:`Dev_null ~stderr:`Dev_null command
+
+
+

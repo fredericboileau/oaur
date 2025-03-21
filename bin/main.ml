@@ -17,10 +17,17 @@ let command =
                 let pkgname = anon ("pkgname" %: string) in
                 fun () -> Lwt_main.run (Aur.depends pkgname)]
     in
+    let fetch = 
+        Command.basic 
+            ~summary:"Fetch aur package"
+            [%map_open.Command
+                let pkgname  = anon ("pkgname" %: string) in
+                fun () -> Lwt_main.run (Aur.fetch pkgname)]
+    in
     Command.group 
         ~summary:"aur utilities clone of aurutils" 
         ~readme:(fun () -> "lorem")
-        [("search", search); ("depends", depends)]
+        [("search", search); ("depends", depends); ("fetch", fetch)]
                     
 
 
