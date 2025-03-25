@@ -126,6 +126,7 @@ let depends pkgname =
     Lwt.return()
 
 
+(*TODO check if already downloaded *)
 exception SubExn of string
 let fetch_exn pkgname = 
     let pkglocation = aur_location ^ "/" ^ pkgname in
@@ -136,15 +137,22 @@ let fetch_exn pkgname =
         | Unix.WEXITED _ -> Lwt.fail (SubExn (Printf.sprintf "Pkg %s is not in AUR\n" pkgname))
         | Unix.WSIGNALED _ | Unix.WSTOPPED _ -> Lwt.fail (SubExn "Subprocess error")
     in
-    let%lwt p = 
-        let command = ("git", [|"git"; "clone"; pkglocation|]) in
-        Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null command
-    in
-    let%lwt () =  match p with
-        | Unix.WEXITED 0 -> Lwt.return()
-        | _ -> Lwt.fail (SubExn (Printf.sprintf "Could not clone %s" pkgname))
-    in
-    Lwt.return()
+    let pathtocheck = Filename.concat pkgname ".git" in
+    let pathclean = not (Sys.file_exists pathtocheck && Sys.is_directory pathtocheck) in
+    if pathclean then
+        let%lwt p = 
+            let command = ("git", [|"git"; "clone"; pkglocation|]) in
+            Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null command
+        in
+        let%lwt () =  match p with
+            | Unix.WEXITED 0 -> Lwt.return()
+            | _ -> Lwt.fail (SubExn (Printf.sprintf "Could not clone %s" pkgname))
+        in Lwt.return()
+    else
+        (* sync code goes here*)
+        let%lwt () = Lwt_io.printlf "git directory for %s exists already" pkgname 
+        in Lwt.return()
+
 
 
 let fetch pkgname = 
