@@ -20,6 +20,7 @@ depends: [
   "atdgen"
   "ocolor"
   "yojson"
+  "flock"
   "odoc" {with-doc}
 ]
 build: [

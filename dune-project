@@ -21,7 +21,7 @@
  (description "Rewrite of aurutils functionalities in ocaml")
  (depends async ocaml dune core 
           core_unix uri cohttp-lwt-unix atdgen
-          ocolor yojson)
+          ocolor yojson flock)
  (tags
   (topics "to describe" your project)))
 
