@@ -139,25 +139,50 @@ let run command =
 
 let fetch_exn pkgname = 
   let pkglocation = aur_location ^ "/" ^ pkgname in
-  let command = ("git", [|"git";"ls-remote"; "--exit-code"; pkglocation|]) in
+  let command = ("", [|"git";"ls-remote"; "--exit-code"; pkglocation|]) in
   let%lwt p = Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null command in
   let%lwt () = match p with
     | Unix.WEXITED 0 -> Lwt.return()
-    | Unix.WEXITED _ -> Lwt.fail (SubExn (Printf.sprintf "Pkg %s is not in AUR\n" pkgname))
-    | Unix.WSIGNALED _ | Unix.WSTOPPED _ -> Lwt.fail (SubExn "Subprocess error")
+    | Unix.WEXITED _ -> raise (SubExn (Printf.sprintf "Pkg %s is not in AUR\n" pkgname))
+    | _ -> raise (SubExn "Subprocess error")
   in
   let pathtocheck = Filename.concat pkgname ".git" in
   let pathclean = not (Sys.file_exists pathtocheck && Sys.is_directory pathtocheck) in
   if pathclean then
-    let%lwt () = run ("git", [|"git"; "clone"; pkglocation|])
+    let%lwt () = run ("", [|"git"; "clone"; pkglocation|])
     in Lwt.return()
   else
+    let sync_should_merge upstream dest =
+      let%lwt p =
+        Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null
+          ("", [|"git"; "merge-base"; "--is-ancestor"; upstream; dest|])
+      in
+      match p with
+      | Unix.WEXITED 0 -> Lwt.return(false)
+      | Unix.WEXITED 1 -> Lwt.return(true)
+      | _ -> raise (SubExn "git merge-base error")
+    in
     (* sync code goes here*)
     let%lwt () = Lwt_io.printlf "git directory for %s exists already" pkgname in
     let fd = Unix.openfile pathtocheck [Unix.O_RDONLY] 0o640 in
+
     Flock.flock fd LOCK_EX;
-    (*TODO *)
-    let%lwt() = run ("git", [|"git"; "-C" ; pkgname; "fetch"; "origin"|]) in
+
+    let%lwt() = run ("", [|"git"; "-C" ; pkgname; "fetch"; "origin"|]) in
+
+    let%lwt orig_head = Lwt_process.pread
+        ("", [|"git"; "-C"; pkgname; "rev-parse"; "--verify"; "HEAD"|]) in
+    let orig_head = Core.String.strip orig_head in
+    Printf.printf "%s" orig_head;
+
+    let discard_hardcoded = false in
+
+    let%lwt should_merge = sync_should_merge "origin/HEAD" "HEAD" in
+    (* if should_merge then *)
+    (*   if discard_hardcoded *)
+    (*   run("", [|"git"; "-C"; "pkgname"; "checkout"; "./"|]) *)
+    (*   else *)
+    (*     run ("", [|"git"; "-C"; "pkgname"; "merge"; "origin/HEAD"|]) *)
     Flock.flock fd LOCK_UN;
     Lwt.return()
 
