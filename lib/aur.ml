@@ -152,10 +152,10 @@ let fetch_exn pkgname =
     let%lwt () = run ("", [|"git"; "clone"; pkglocation|])
     in Lwt.return()
   else
-    let sync_should_merge upstream dest =
+    let sync_should_merge upstream dest pkg =
       let%lwt p =
         Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null
-          ("", [|"git"; "merge-base"; "--is-ancestor"; upstream; dest|])
+          ("", [|"git"; "-C"; pkg; "merge-base"; "--is-ancestor"; upstream; dest|])
       in
       match p with
       | Unix.WEXITED 0 -> Lwt.return(false)
@@ -173,16 +173,20 @@ let fetch_exn pkgname =
     let%lwt orig_head = Lwt_process.pread
         ("", [|"git"; "-C"; pkgname; "rev-parse"; "--verify"; "HEAD"|]) in
     let orig_head = Core.String.strip orig_head in
-    Printf.printf "%s" orig_head;
+    Printf.printf "%s\n" orig_head;
 
+    let%lwt should_merge = sync_should_merge "origin/HEAD" "HEAD" pkgname in
     let discard_hardcoded = false in
+    let%lwt () =
+      if should_merge then
+        if discard_hardcoded then
+          run("", [|"git"; "-C"; "pkgname"; "checkout"; "./"|])
+        else
+          run ("", [|"git"; "-C"; "pkgname"; "merge"; "origin/HEAD"|])
+      else
+        Lwt.return()
+    in
 
-    let%lwt should_merge = sync_should_merge "origin/HEAD" "HEAD" in
-    (* if should_merge then *)
-    (*   if discard_hardcoded *)
-    (*   run("", [|"git"; "-C"; "pkgname"; "checkout"; "./"|]) *)
-    (*   else *)
-    (*     run ("", [|"git"; "-C"; "pkgname"; "merge"; "origin/HEAD"|]) *)
     Flock.flock fd LOCK_UN;
     Lwt.return()
 
