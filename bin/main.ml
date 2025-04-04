@@ -21,8 +21,10 @@ let command =
         Command.basic 
             ~summary:"Fetch aur package"
             [%map_open.Command
-                let pkgname  = anon ("pkgname" %: string) in
-                fun () -> Lwt_main.run (Aur.fetch pkgname)]
+                let pkgname  = anon ("pkgname" %: string) and
+                syncmode = flag "--syncmode" (optional string)
+                            ~doc:"syncmode when fetching aur repo" in
+                fun () -> Lwt_main.run (Aur.fetch pkgname syncmode)]
     in
     Command.group 
         ~summary:"aur utilities clone of aurutils" 

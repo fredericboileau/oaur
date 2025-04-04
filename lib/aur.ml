@@ -137,7 +137,7 @@ let run command =
   | _ -> raise (SubExn "Subprocess error")
 
 
-let fetch_exn pkgname = 
+let fetch_exn pkgname syncmode = 
   let pkglocation = aur_location ^ "/" ^ pkgname in
   let command = ("", [|"git";"ls-remote"; "--exit-code"; pkglocation|]) in
   let%lwt p = Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null command in
@@ -146,43 +146,52 @@ let fetch_exn pkgname =
     | Unix.WEXITED _ -> raise (SubExn (Printf.sprintf "Pkg %s is not in AUR\n" pkgname))
     | _ -> raise (SubExn "Subprocess error")
   in
+
   let pathtocheck = Filename.concat pkgname ".git" in
   let pathclean = not (Sys.file_exists pathtocheck && Sys.is_directory pathtocheck) in
+  (*TODO add results file? *)
+  (*TODO add rebase and *)
+
   if pathclean then
+
     let%lwt () = run ("", [|"git"; "clone"; pkglocation|])
     in Lwt.return()
+
   else
-    let sync_should_merge upstream dest pkg =
+    let git = [|"git"; "-C"; pkgname|] in 
+    let (@@) = Array.append in
+    let sync_should_merge upstream dest =
       let%lwt p =
         Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null
-          ("", [|"git"; "-C"; pkg; "merge-base"; "--is-ancestor"; upstream; dest|])
+          ("", git @@ [|"merge-base"; "--is-ancestor"; upstream; dest|] )
       in
       match p with
       | Unix.WEXITED 0 -> Lwt.return(false)
       | Unix.WEXITED 1 -> Lwt.return(true)
       | _ -> raise (SubExn "git merge-base error")
-    in
-    (* sync code goes here*)
-    let%lwt () = Lwt_io.printlf "git directory for %s exists already" pkgname in
-    let fd = Unix.openfile pathtocheck [Unix.O_RDONLY] 0o640 in
 
+    in (* sync code goes here*)
+
+    let%lwt () = Lwt_io.printlf "git directory for %s exists already, acquiring lock" pkgname in
+    let fd = Unix.openfile pathtocheck [Unix.O_RDONLY] 0o640 in
     Flock.flock fd LOCK_EX;
 
-    let%lwt() = run ("", [|"git"; "-C" ; pkgname; "fetch"; "origin"|]) in
+    let%lwt() = run ("", git @@ [|"fetch"; "origin"|]) in
 
     let%lwt orig_head = Lwt_process.pread
         ("", [|"git"; "-C"; pkgname; "rev-parse"; "--verify"; "HEAD"|]) in
     let orig_head = Core.String.strip orig_head in
     Printf.printf "%s\n" orig_head;
 
-    let%lwt should_merge = sync_should_merge "origin/HEAD" "HEAD" pkgname in
-    let discard_hardcoded = false in
+    let%lwt should_merge = sync_should_merge "origin/HEAD" "HEAD" in
     let%lwt () =
       if should_merge then
-        if discard_hardcoded then
-          run("", [|"git"; "-C"; "pkgname"; "checkout"; "./"|])
-        else
-          run ("", [|"git"; "-C"; "pkgname"; "merge"; "origin/HEAD"|])
+        match syncmode with
+            | Some "merge" | None -> run ("", git @@ [|"merge"; "origin/HEAD"|])
+            | Some "rebase" -> Lwt_io.printlf "rebasing"
+            | Some "reset" -> Lwt_io.printlf "reseting"
+            | Some "fetch" -> Lwt_io.printlf "fetching";
+            | _ -> raise (Failure "bad syncmode, should be handled higher")
       else
         Lwt.return()
     in
@@ -191,6 +200,6 @@ let fetch_exn pkgname =
     Lwt.return()
 
 
-let fetch pkgname =
-  try%lwt fetch_exn pkgname
+let fetch pkgname syncmode =
+  try%lwt fetch_exn pkgname syncmode
   with SubExn msg -> Printf.printf "Error: %s" msg; Lwt.return()
