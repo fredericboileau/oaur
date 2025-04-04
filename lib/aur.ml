@@ -187,11 +187,11 @@ let fetch_exn pkgname syncmode =
     let%lwt () =
       if should_merge then
         match syncmode with
-            | Some "merge" | None -> run ("", git @@ [|"merge"; "origin/HEAD"|])
+            | None | Some "merge"  -> run ("", git @@ [|"merge"; "origin/HEAD"|])
             | Some "rebase" -> Lwt_io.printlf "rebasing"
-            | Some "reset" -> Lwt_io.printlf "reseting"
-            | Some "fetch" -> Lwt_io.printlf "fetching";
-            | _ -> raise (Failure "bad syncmode, should be handled higher")
+            | Some "reset"  -> Lwt_io.printlf "reseting"
+            | Some "fetch"  -> Lwt_io.printlf "fetching";
+            | _ -> failwith "bad syncmode"
       else
         Lwt.return()
     in

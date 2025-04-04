@@ -17,7 +17,16 @@ let command =
                 let pkgname = anon ("pkgname" %: string) in
                 fun () -> Lwt_main.run (Aur.depends pkgname)]
     in
-    let fetch = 
+    let syncmode =
+        fun syncmode ->
+          match Some syncmode with
+          | Some "merge" | None -
+          | Some "rebase" -> Lwt_io.printlf "rebasing"
+          | Some "reset" -> Lwt_io.printlf "reseting"
+          | Some "fetch" -> Lwt_io.printlf "fetching";
+          | _ -> raise (Failure "bad syncmode, should be handled higher")
+      )
+let fetch = 
         Command.basic 
             ~summary:"Fetch aur package"
             [%map_open.Command
