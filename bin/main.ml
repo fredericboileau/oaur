@@ -23,8 +23,10 @@ let command =
             [%map_open.Command
                 let pkgname  = anon ("pkgname" %: string) and
                 syncmode = flag "--syncmode" (optional string)
-                                ~doc:"syncmode when fetching aur repo" in
-                fun () -> Lwt_main.run (Aur.fetch pkgname syncmode)]
+                                ~doc:"syncmode when fetching aur repo" and
+                discard = flag "--discard" no_arg
+                                ~doc:"discard local changes when syncing" in
+                fun () -> Lwt_main.run (Aur.fetch pkgname syncmode discard)]
     in
     Command.group 
         ~summary:"aur utilities clone of aurutils" 
