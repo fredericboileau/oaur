@@ -8,6 +8,15 @@ let aur_location = "https://aur.archlinux.org"
 let aur_rpc_ver = 5
 let ua_header = Header.init_with "User-Agent" "oaur"
 
+exception SubExn of string
+(*TODO how to redirect stdout to stderr*)
+let run command =
+  let%lwt p =
+    Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null command
+  in
+  match p with
+  | Unix.WEXITED 0 -> Lwt.return()
+  | _ -> raise (SubExn "Subprocess error")
 
 let search term  =
   let build_query term  =
@@ -16,8 +25,8 @@ let search term  =
     Uri.with_path aururl path
   in
   let search_aur query =
-    Client.get ?headers:(Some ua_header) query
-    >>= fun (_, body) -> Cohttp_lwt.Body.to_string body
+    let%lwt(_,body) = Client.get ?headers:(Some ua_header) query in
+    Cohttp_lwt.Body.to_string body
   in
   let display_search_results body =
     let open Yojson.Basic in
@@ -48,8 +57,8 @@ let fetch_deps pkgname =
     Uri.add_query_param url ("arg[]", [pkgname])
   in
   let query_aur query =
-    Client.get ?headers:(Some ua_header) query
-    >>= fun (_,body) -> Cohttp_lwt.Body.to_string body
+    let%lwt(_,body) = Client.get ?headers:(Some ua_header) query in
+    Cohttp_lwt.Body.to_string body
   in
   let extract_results body =
     let open Yojson.Basic.Util in
@@ -67,11 +76,12 @@ type classify_deps = { repo: string list; aur: string list; other: check_if_repo
 
 
 let check_if_repo pkgname =
-  let command pkgname = ("pacman", [|"pacman";"-Sqi"; pkgname|]) in
-  Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null (command pkgname) 
-  >|= fun p -> { pkgname; status = p }
+  let command pkgname = ("", [|"pacman";"-Sqi"; pkgname|]) in
+  let%lwt p  =  Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null (command pkgname) 
+  in Lwt.return({ pkgname; status = p })
 
 
+(*TODO simplify monads*)
 let check_if_aur pkgname =
   let build_query pkgname =
     let aururl = Uri.of_string aur_location in
@@ -80,8 +90,8 @@ let check_if_aur pkgname =
     Uri.add_query_param url ("arg[]", [pkgname])
   in
   let check_rpc query =
-    Client.get ?headers:(Some ua_header) query
-    >>= fun(_,body) -> Cohttp_lwt.Body.to_string body
+    let%lwt(_,body) = Client.get ?headers:(Some ua_header) query in
+    Cohttp_lwt.Body.to_string body
   in
   let extract_result body =
     let open Yojson.Basic.Util in
@@ -126,16 +136,6 @@ let depends pkgname =
   Lwt.return()
 
 
-exception SubExn of string
-
-(*TODO how to redirect stdout to stderr*)
-let run command =
-  let%lwt p =
-    Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null command
-  in
-  match p with
-  | Unix.WEXITED 0 -> Lwt.return()
-  | _ -> raise (SubExn "Subprocess error")
 
 
 let fetch_exn pkgname syncmode discard = 
@@ -213,7 +213,7 @@ let fetch_exn pkgname syncmode discard =
             run ("", git @@ [|"rebase"; upstream|])
 
           | "reset"  -> run ("", git @@ [|"reset"; "--hard"; dest|])
-          | "fetch"  -> Lwt_io.printlf "fetching"
+          | "fetch"  -> Lwt.return()
           | badsyncmode ->
             failwith (Printf.sprintf "Bad syncmode: %s" badsyncmode)
 
