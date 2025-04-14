@@ -3,3 +3,7 @@
  (libraries core core_unix.command_unix core_unix.date_unix uri 
             cohttp-lwt-unix atdgen ocolor yojson lwt_ppx flock)
  (preprocess (pps ppx_jane lwt_ppx)))
+
+(env
+  (dev
+    (flags (:standard -warn-error -A))))

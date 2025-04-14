@@ -1,3 +1,5 @@
+(*TODO simple subprocess*)
+
 open Lwt
 open Cohttp
 open Cohttp_lwt_unix
@@ -140,7 +142,7 @@ let depends pkgname =
 
 let fetch_exn pkgname syncmode discard = 
   let pkglocation = aur_location ^ "/" ^ pkgname in
-  let command = ("", [|"git";"ls-remote"; "--exit-code"; pkglocation|]) in
+  let command = ("git", [|"git";"ls-remote"; "--exit-code"; pkglocation|]) in
   let%lwt p = Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null command in
   let%lwt () = match p with
     | Unix.WEXITED 0 -> Lwt.return()
@@ -154,7 +156,7 @@ let fetch_exn pkgname syncmode discard =
 
   if pathclean then
 
-    let%lwt () = run ("", [|"git"; "clone"; pkglocation|])
+    let%lwt () = run ("git", [|"git"; "clone"; pkglocation|])
     in Lwt.return()
 
   else
@@ -163,7 +165,7 @@ let fetch_exn pkgname syncmode discard =
     let sync_should_merge upstream dest =
       let%lwt p =
         Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null
-          ("", git @@ [|"merge-base"; "--is-ancestor"; upstream; dest|] )
+          ("git", git @@ [|"merge-base"; "--is-ancestor"; upstream; dest|] )
       in
       match p with
       | Unix.WEXITED 0 -> Lwt.return(false)
@@ -177,10 +179,9 @@ let fetch_exn pkgname syncmode discard =
     let fd = Unix.openfile pathtocheck [Unix.O_RDONLY] 0o640 in
     Flock.flock fd LOCK_EX;
 
-    let%lwt() = run ("", git @@ [|"fetch"; "origin"|]) in
+    let%lwt() = run ("git", git @@ [|"fetch"; "origin"|]) in
 
-    let%lwt orig_head = Lwt_process.pread ("", git @@ [|"rev-parse"; "--verify"; "HEAD"|]) in
-    let orig_head = Core.String.strip orig_head in
+    let%lwt orig_head = Lwt_process.pread_line ("git", git @@ [|"rev-parse"; "--verify"; "HEAD"|]) in
     Printf.printf "%s\n" orig_head;
 
     let%lwt should_merge = sync_should_merge "origin/HEAD" "HEAD" in
@@ -198,21 +199,21 @@ let fetch_exn pkgname syncmode discard =
           | "merge"  ->
             let%lwt () =
               if discard then
-               run("", git @@ [|"checkout"; "./"|])
+               run("git", git @@ [|"checkout"; "./"|])
             else
               Lwt.return()
             in
-            run("", git @@ [|"merge"; upstream|])
+            run("git", git @@ [|"merge"; upstream|])
           | "rebase" ->
             let%lwt () =
               if discard then
-               run("", git @@ [|"checkout"; "./"|])
+               run("git", git @@ [|"checkout"; "./"|])
             else
               Lwt.return()
             in
-            run ("", git @@ [|"rebase"; upstream|])
+            run ("git", git @@ [|"rebase"; upstream|])
 
-          | "reset"  -> run ("", git @@ [|"reset"; "--hard"; dest|])
+          | "reset"  -> run ("git", git @@ [|"reset"; "--hard"; dest|])
           | "fetch"  -> Lwt.return()
           | badsyncmode ->
             failwith (Printf.sprintf "Bad syncmode: %s" badsyncmode)
@@ -227,6 +228,78 @@ let fetch_exn pkgname syncmode discard =
     Lwt.return()
 
 
-let fetch pkgname syncmode discard =
-  try%lwt fetch_exn pkgname syncmode discard
+(*spec: if --recurse passed use depends with a tsort algo *)
+(*  to generate list, fetch should then handle lists and the *)
+(*  argument passed by cli should be wrapped in said list *)
+(*TODO cli should pass list*)
+ 
+let fetch pkgnames syncmode discard =
+  try%lwt fetch_exn (List.hd pkgnames) syncmode discard
   with SubExn msg -> Printf.printf "Error: %s" msg; Lwt.return()
+
+
+let pp_string_list fmt lst =
+  let open Format in
+  fprintf fmt "[%a]"
+    (pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt "; ") pp_print_string)
+    lst
+
+
+let chroot build update create path pkgnames = 
+  let (//) = Filename.concat in
+  let (@@) = Array.append in
+
+  let string_of_string_list lst = "[" ^ String.concat "; " lst ^ "]" in
+  let rec default_first lst =
+    match lst with
+    | hd::tl  -> if Sys.file_exists hd then hd else default_first tl
+    | [] -> raise (Failure (Printf.sprintf "A required file is missing in the list: %s"
+                             (string_of_string_list lst)))
+  in
+
+  let%lwt machine = Lwt_process.pread_line ("uname", [|"uname"; "-m"|]) in
+  let etcdir = "/etc/aurutils" in
+  let shrdir = "/usr/share/devtools" in
+  let directory = "/var/lib/aurbuild" // machine in
+  let default_pacman_paths = [
+    etcdir // "pacman-" ^ machine ^ ".conf";
+    shrdir // "pacman.conf.d" // "aurutils" ^ machine ^ ".conf"
+  ] in
+  let default_makepkg_paths = [
+    etcdir // "makepkg-" ^ machine ^ ".conf";
+    shrdir // "makepkg.conf.d" // machine ^ ".conf"
+  ] in
+
+  let pacman_conf = default_first default_pacman_paths in
+  let makepkg_conf = default_first default_makepkg_paths in
+
+  let aur_pacman_auth = [|"sudo"; "--preserve-env=GNUGPGHOME,SSH_AUTH_SOCK,PKGDEST"|] in
+  let%lwt base_packages =
+    if pkgnames <> [] then
+      Lwt.return pkgnames
+    else
+      let%lwt multilib_in_conf = Lwt_process.pread
+          ("pacini", [|"pacini"; "--section=multilib"; pacman_conf|]) in
+      if multilib_in_conf <> "" && machine = "x86_64" then
+        Lwt.return ["base-devel"; "multilib-devel"]
+      else
+        Lwt.return ["base-devel"]
+  in
+  Format.printf "base-packages: %a" pp_string_list base_packages;
+
+  if not (Sys.file_exists directory && Sys.is_directory directory) then
+    let%lwt () = run
+        ("", aur_pacman_auth @@ [| "install"; "-d"; directory; "-m"; "755"; "-v"|]) in
+    Lwt.return()
+  else
+    Lwt.return()
+
+
+
+
+
+
+
+(*TODO update and build needs bindmounts_rw arguments*)
+
+  (* Lwt.return() *)
