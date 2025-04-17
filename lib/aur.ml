@@ -10,6 +10,31 @@ let aur_location = "https://aur.archlinux.org"
 let aur_rpc_ver = 5
 let ua_header = Header.init_with "User-Agent" "oaur"
 
+(*pretty printing*)
+
+let pp_string_list fmt lst =
+  let open Format in
+  fprintf fmt "[%a]"
+    (pp_print_list ~pp_sep:(fun ppf () -> fprintf ppf "; ") pp_print_string)
+    lst
+
+let pp_string_list_raw fmt lst =
+  let open Format in
+  fprintf fmt "%a"
+    (pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt " ") pp_print_string)
+
+    lst
+
+let pp_array printer fmt arr =
+  Array.iteri (fun i x ->
+    if i > 0 then Format.fprintf fmt " ";
+    Format.fprintf fmt "%a" printer x
+  ) arr
+
+let array_to_string arr =
+  Format.asprintf "%a" (pp_array Format.pp_print_string) arr
+
+
 exception SubExn of string
 (*TODO how to redirect stdout to stderr*)
 let run command =
@@ -19,6 +44,24 @@ let run command =
   match p with
   | Unix.WEXITED 0 -> Lwt.return()
   | _ -> raise (SubExn "Subprocess error")
+
+let run2 command =
+  match  (Unix.system (array_to_string command)) with
+  | Unix.WEXITED 0 -> ()
+  | _ -> raise (SubExn "Subprocess error")
+
+let run3 (command, args) =
+  let (_,status) = Unix.waitpid [] (Unix.create_process
+          command args Unix.stdin Unix.stderr Unix.stderr) in
+  match status with
+  | Unix.WEXITED 0 -> ()
+  | Unix.WEXITED code -> raise (SubExn (Printf.sprintf "Subprocess exited with code %d" code))
+  | _ -> raise (SubExn "Subprocess error")
+
+let run_read_all (cmd,args) =
+  let inp = Unix.open_process_args_in cmd args in
+  let r = In_channel.input_all inp in
+  In_channel.close inp; r
 
 let search term  =
   let build_query term  =
@@ -176,8 +219,8 @@ let fetch_exn pkgname syncmode discard =
 
     let%lwt () = Lwt_io.printlf "git directory for %s exists already, acquiring lock" pkgname in
     (*TODO check for --timeout*)
-    let fd = Unix.openfile pathtocheck [Unix.O_RDONLY] 0o640 in
-    Flock.flock fd LOCK_EX;
+    (* let fd = Unix.openfile pathtocheck [Unix.O_RDONLY] 0o640 in *)
+    (* Flock.flock fd LOCK_EX; *)
 
     let%lwt() = run ("git", git @@ [|"fetch"; "origin"|]) in
 
@@ -224,7 +267,7 @@ let fetch_exn pkgname syncmode discard =
         Lwt.return()
     in
 
-    Flock.flock fd LOCK_UN;
+    (* Flock.flock fd LOCK_UN; *)
     Lwt.return()
 
 
@@ -238,16 +281,13 @@ let fetch pkgnames syncmode discard =
   with SubExn msg -> Printf.printf "Error: %s" msg; Lwt.return()
 
 
-let pp_string_list fmt lst =
-  let open Format in
-  fprintf fmt "[%a]"
-    (pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt "; ") pp_print_string)
-    lst
 
 
-let chroot build update create path pkgnames = 
+exception UsageError of string
+
+let chroot build update create path pkgnames =
   let (//) = Filename.concat in
-  let (@@) = Array.append in
+  let directory_exists d = Sys.file_exists d && Sys.is_directory d in
 
   let string_of_string_list lst = "[" ^ String.concat "; " lst ^ "]" in
   let rec default_first lst =
@@ -274,32 +314,51 @@ let chroot build update create path pkgnames =
   let makepkg_conf = default_first default_makepkg_paths in
 
   let aur_pacman_auth = [|"sudo"; "--preserve-env=GNUGPGHOME,SSH_AUTH_SOCK,PKGDEST"|] in
-  let%lwt base_packages =
+  let base_packages =
     if pkgnames <> [] then
-      Lwt.return pkgnames
+      pkgnames
     else
-      let%lwt multilib_in_conf = Lwt_process.pread
-          ("pacini", [|"pacini"; "--section=multilib"; pacman_conf|]) in
+      let multilib_in_conf = run_read_all
+                               ("pacini",
+                                [|"pacini"; "--section=multilib"; pacman_conf|]) in
       if multilib_in_conf <> "" && machine = "x86_64" then
-        Lwt.return ["base-devel"; "multilib-devel"]
+        ["base-devel"; "multilib-devel"]
       else
-        Lwt.return ["base-devel"]
+        ["base-devel"]
   in
-  Format.printf "base-packages: %a" pp_string_list base_packages;
+  Format.printf "base-packages: %a@" pp_string_list base_packages;
 
-  if not (Sys.file_exists directory && Sys.is_directory directory) then
-    let%lwt () = run
-        ("", aur_pacman_auth @@ [| "install"; "-d"; directory; "-m"; "755"; "-v"|]) in
-    Lwt.return()
-  else
-    Lwt.return()
+  if create then
+    if not (directory_exists directory)  then
+      run3 ("sudo", [|"sudo"; "install"; "-d"; directory; "-m"; "755"; "-v" |]);
+
+    if not (directory_exists (directory // "root")) then
+      run3 ("sudo",
+            [|"sudo";
+              "mkarchroot";
+              "-C"; pacman_conf;
+              "-M"; makepkg_conf;
+              directory // "root";
+              (Format.asprintf "%a" pp_string_list_raw base_packages)|]);
 
 
+  if not (directory_exists (directory // "root")) then
+    raise (Failure (Format.sprintf "chroot: %S is not a directory\n
+                                    chroot: did you run aur choor -create\n"
+                      (directory // "root")));
+  Lwt.return()
+
+  (* let inp = Unix.open_process_args_in "pacman-conf" *)
+  (*             [|"pacman-conf"; "--config"; pacman_conf|] in *)
+  (* let rec read_line_by_line ic lines = *)
+  (*   let line = In_channel.input_line ic in *)
+  (*   match line with *)
+  (*   | Some l -> read_line_by_line ic (l::lines) *)
+  (*   | None -> List.rev lines *)
+  (* in *)
+  (* let lines = read_line_by_line inp [] in *)
+  (* Format.printf "%a" pp_string_list_raw lines; *)
 
 
-
-
-
+      (* Format.printf "base packages: %a" pp_string_list_raw base_packages; *)
 (*TODO update and build needs bindmounts_rw arguments*)
-
-  (* Lwt.return() *)

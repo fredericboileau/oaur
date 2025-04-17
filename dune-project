@@ -11,7 +11,7 @@
 
 (maintainers "Frederic Boileau")
 
-(license LICENSE)
+(license MIT)
 
 (documentation https://url/to/documentation)
 
@@ -20,8 +20,8 @@
  (synopsis "Archlinux User Repository helper")
  (description "Rewrite of aurutils functionalities in ocaml")
  (depends async ocaml dune core 
-          core_unix uri cohttp-lwt-unix atdgen
-          ocolor yojson flock)
+          core_unix uri cohttp-lwt-unix
+          ocolor yojson lwt-ppx)
  (tags
   (topics "to describe" your project)))
 
