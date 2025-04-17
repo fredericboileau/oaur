@@ -1,8 +1,9 @@
 (*TODO simple subprocess*)
 
-open Lwt
+(* open Lwt *)
 open Cohttp
-open Cohttp_lwt_unix
+(* open Cohttp_lwt_unix *)
+(* open Lwt.Syntax *)
 
 (* TODO: check how alad installs pacman deps *)
 
@@ -38,7 +39,8 @@ let array_to_string arr =
 exception SubExn of string
 (*TODO how to redirect stdout to stderr*)
 let run command =
-  let%lwt p =
+  let open Lwt.Syntax in
+  let* p =
     Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null command
   in
   match p with
@@ -70,7 +72,9 @@ let search term  =
     Uri.with_path aururl path
   in
   let search_aur query =
-    let%lwt(_,body) = Client.get ?headers:(Some ua_header) query in
+    let open Lwt.Syntax in
+    let open Cohttp_lwt_unix in
+    let*(_,body) = Client.get ?headers:(Some ua_header) query in
     Cohttp_lwt.Body.to_string body
   in
   let display_search_results body =
@@ -92,6 +96,7 @@ let search term  =
       )
       results
   in
+  let open Lwt in
   build_query term |> search_aur >|= fun body -> display_search_results body
 
 let fetch_deps pkgname =
@@ -102,7 +107,9 @@ let fetch_deps pkgname =
     Uri.add_query_param url ("arg[]", [pkgname])
   in
   let query_aur query =
-    let%lwt(_,body) = Client.get ?headers:(Some ua_header) query in
+    let open Lwt.Syntax in
+    let open Cohttp_lwt_unix in
+    let*(_,body) = Client.get ?headers:(Some ua_header) query in
     Cohttp_lwt.Body.to_string body
   in
   let extract_results body =
@@ -111,6 +118,7 @@ let fetch_deps pkgname =
     |> member "results" |> to_list |> List.hd
     |> member "Depends" |> to_list |> List.map to_string
   in
+  let open Lwt in
   build_query pkgname |> query_aur >|= fun body -> extract_results body
 
 
@@ -121,8 +129,9 @@ type classify_deps = { repo: string list; aur: string list; other: check_if_repo
 
 
 let check_if_repo pkgname =
+  let open Lwt.Syntax in
   let command pkgname = ("", [|"pacman";"-Sqi"; pkgname|]) in
-  let%lwt p  =  Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null (command pkgname) 
+  let* p  =  Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null (command pkgname) 
   in Lwt.return({ pkgname; status = p })
 
 
@@ -135,7 +144,9 @@ let check_if_aur pkgname =
     Uri.add_query_param url ("arg[]", [pkgname])
   in
   let check_rpc query =
-    let%lwt(_,body) = Client.get ?headers:(Some ua_header) query in
+    let open Lwt.Syntax in
+    let open Cohttp_lwt_unix in
+    let*(_,body) = Client.get ?headers:(Some ua_header) query in
     Cohttp_lwt.Body.to_string body
   in
   let extract_result body =
@@ -145,10 +156,12 @@ let check_if_aur pkgname =
     in
     if resultcount > 1 then true else false
   in
+  let open Lwt in
   build_query pkgname |> check_rpc >|= fun body -> extract_result body
 
 
 let classify_deps results =
+  let open Lwt in
   let rec classify_deps_aux results repo aur other =
     match results with
     | hd::tl ->
@@ -169,9 +182,10 @@ let classify_deps results =
 (* TODO design datastructure for recursively classifying deps
    and pretty printer for it *)
 let depends pkgname =
-  let%lwt deps = fetch_deps pkgname in
-  let%lwt results = Lwt.all (List.map check_if_repo deps) in
-  let%lwt classified = classify_deps results in
+  let open Lwt.Syntax in
+  let* deps = fetch_deps pkgname in
+  let* results = Lwt.all (List.map check_if_repo deps) in
+  let* classified = classify_deps results in
   Printf.printf "repo pkgs: \n";
   List.iter (fun r -> Printf.printf "  %s\n" r) classified.repo;
   Printf.printf "aur pkgs: \n";
@@ -184,10 +198,11 @@ let depends pkgname =
 
 
 let fetch_exn pkgname syncmode discard = 
+  let open Lwt.Syntax in
   let pkglocation = aur_location ^ "/" ^ pkgname in
   let command = ("git", [|"git";"ls-remote"; "--exit-code"; pkglocation|]) in
-  let%lwt p = Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null command in
-  let%lwt () = match p with
+  let* p = Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null command in
+  let* () = match p with
     | Unix.WEXITED 0 -> Lwt.return()
     | Unix.WEXITED _ -> raise (SubExn (Printf.sprintf "Pkg %s is not in AUR\n" pkgname))
     | _ -> raise (SubExn "Subprocess error")
@@ -199,14 +214,14 @@ let fetch_exn pkgname syncmode discard =
 
   if pathclean then
 
-    let%lwt () = run ("git", [|"git"; "clone"; pkglocation|])
+    let* () = run ("git", [|"git"; "clone"; pkglocation|])
     in Lwt.return()
 
   else
     let git = [|"git"; "-C"; pkgname|] in 
     let (@@) = Array.append in
     let sync_should_merge upstream dest =
-      let%lwt p =
+      let* p =
         Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null
           ("git", git @@ [|"merge-base"; "--is-ancestor"; upstream; dest|] )
       in
@@ -217,18 +232,18 @@ let fetch_exn pkgname syncmode discard =
 
     in (* sync code goes here*)
 
-    let%lwt () = Lwt_io.printlf "git directory for %s exists already, acquiring lock" pkgname in
+    let* () = Lwt_io.printlf "git directory for %s exists already, acquiring lock" pkgname in
     (*TODO check for --timeout*)
     (* let fd = Unix.openfile pathtocheck [Unix.O_RDONLY] 0o640 in *)
     (* Flock.flock fd LOCK_EX; *)
 
-    let%lwt() = run ("git", git @@ [|"fetch"; "origin"|]) in
+    let*() = run ("git", git @@ [|"fetch"; "origin"|]) in
 
-    let%lwt orig_head = Lwt_process.pread_line ("git", git @@ [|"rev-parse"; "--verify"; "HEAD"|]) in
+    let* orig_head = Lwt_process.pread_line ("git", git @@ [|"rev-parse"; "--verify"; "HEAD"|]) in
     Printf.printf "%s\n" orig_head;
 
-    let%lwt should_merge = sync_should_merge "origin/HEAD" "HEAD" in
-    let%lwt () =
+    let* should_merge = sync_should_merge "origin/HEAD" "HEAD" in
+    let* () =
       let upstream = "origin/HEAD" in
       if should_merge then
         let syncmode = Option.value ~default:("merge") syncmode in
@@ -240,7 +255,7 @@ let fetch_exn pkgname syncmode discard =
         try%lwt
           match syncmode with
           | "merge"  ->
-            let%lwt () =
+            let* () =
               if discard then
                run("git", git @@ [|"checkout"; "./"|])
             else
@@ -297,7 +312,9 @@ let chroot build update create path pkgnames =
                              (string_of_string_list lst)))
   in
 
-  let%lwt machine = Lwt_process.pread_line ("uname", [|"uname"; "-m"|]) in
+  let machine = String.trim (run_read_all ("uname", [|"uname"; "-m"|])) in
+  Printf.printf "%s" machine;
+
   let etcdir = "/etc/aurutils" in
   let shrdir = "/usr/share/devtools" in
   let directory = "/var/lib/aurbuild" // machine in
@@ -305,7 +322,8 @@ let chroot build update create path pkgnames =
     etcdir // "pacman-" ^ machine ^ ".conf";
     shrdir // "pacman.conf.d" // "aurutils" ^ machine ^ ".conf"
   ] in
-  let default_makepkg_paths = [
+  let
+ default_makepkg_paths = [
     etcdir // "makepkg-" ^ machine ^ ".conf";
     shrdir // "makepkg.conf.d" // machine ^ ".conf"
   ] in
@@ -313,7 +331,8 @@ let chroot build update create path pkgnames =
   let pacman_conf = default_first default_pacman_paths in
   let makepkg_conf = default_first default_makepkg_paths in
 
-  let aur_pacman_auth = [|"sudo"; "--preserve-env=GNUGPGHOME,SSH_AUTH_SOCK,PKGDEST"|] in
+
+  (* let aur_pacman_auth = [|"sudo"; "--preserve-env=GNUGPGHOME,SSH_AUTH_SOCK,PKGDEST"|] in *)
   let base_packages =
     if pkgnames <> [] then
       pkgnames
@@ -326,38 +345,39 @@ let chroot build update create path pkgnames =
       else
         ["base-devel"]
   in
-  Format.printf "base-packages: %a@" pp_string_list base_packages;
+  Format.printf "base-packages: %a" pp_string_list base_packages;
 
   if create then
     if not (directory_exists directory)  then
       run3 ("sudo", [|"sudo"; "install"; "-d"; directory; "-m"; "755"; "-v" |]);
 
-    if not (directory_exists (directory // "root")) then
-      run3 ("sudo",
-            [|"sudo";
-              "mkarchroot";
-              "-C"; pacman_conf;
-              "-M"; makepkg_conf;
-              directory // "root";
-              (Format.asprintf "%a" pp_string_list_raw base_packages)|]);
+      if not (directory_exists (directory // "root")) then
+        run3 ("sudo",
+              [|"sudo";
+                "mkarchroot";
+                "-C"; pacman_conf;
+                "-M"; makepkg_conf;
+                directory // "root";
+                (Format.asprintf "%a" pp_string_list_raw base_packages)|]);
 
 
   if not (directory_exists (directory // "root")) then
     raise (Failure (Format.sprintf "chroot: %S is not a directory\n
                                     chroot: did you run aur choor -create\n"
                       (directory // "root")));
-  Lwt.return()
 
-  (* let inp = Unix.open_process_args_in "pacman-conf" *)
-  (*             [|"pacman-conf"; "--config"; pacman_conf|] in *)
-  (* let rec read_line_by_line ic lines = *)
-  (*   let line = In_channel.input_line ic in *)
-  (*   match line with *)
-  (*   | Some l -> read_line_by_line ic (l::lines) *)
-  (*   | None -> List.rev lines *)
-  (* in *)
-  (* let lines = read_line_by_line inp [] in *)
-  (* Format.printf "%a" pp_string_list_raw lines; *)
+  let inp = Unix.open_process_args_in "pacman-conf"
+              [|"pacman-conf"; "--config"; pacman_conf|] in
+
+  (*TODO extract relevant lines*)
+  let rec read_line_by_line ic lines =
+    let line = In_channel.input_line ic in
+    match line with
+    | Some l -> read_line_by_line ic (l::lines)
+    | None -> List.rev lines
+  in
+  let lines = read_line_by_line inp [] in
+  Format.printf "%a" pp_string_list lines;
 
 
       (* Format.printf "base packages: %a" pp_string_list_raw base_packages; *)

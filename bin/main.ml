@@ -45,7 +45,7 @@ let command =
                 multilib-devel package group is also installed. If packages or package groups
                 are ilsted on the command-line, these are installed instead of the above." and
            path = flag "--path" no_arg ~doc:"Print the path to the container template" in
-           fun () -> Lwt_main.run (Aur.chroot build update create path pkgnames)
+           fun () -> (Aur.chroot build update create path pkgnames)
         ]
 
     in
