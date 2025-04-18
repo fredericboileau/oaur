@@ -44,8 +44,11 @@ let command =
                 and [multilib] is set in the pacman configuration (see --pacman-conf), the
                 multilib-devel package group is also installed. If packages or package groups
                 are ilsted on the command-line, these are installed instead of the above." and
-           path = flag "--path" no_arg ~doc:"Print the path to the container template" in
-           fun () -> (Aur.chroot build update create path pkgnames)
+           path = flag "--path" no_arg ~doc:"Print the path to the container template" and
+           bind_ro = flag "--bind" (listed string) ~doc:"Bind a directory read-only to the container" and
+           bind_rw = flag "--bind-rw" (listed string) ~doc:"Bind a directory read-write to the container" in
+               
+           fun () -> (Aur.chroot build update create path bind_ro bind_rw pkgnames)
         ]
 
     in

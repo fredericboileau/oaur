@@ -35,6 +35,9 @@ let pp_array printer fmt arr =
 let array_to_string arr =
   Format.asprintf "%a" (pp_array Format.pp_print_string) arr
 
+let string_of_list lst =
+  String.concat " " lst
+
 
 exception SubExn of string
 (*TODO how to redirect stdout to stderr*)
@@ -300,7 +303,13 @@ let fetch pkgnames syncmode discard =
 
 exception UsageError of string
 
-let chroot build update create path pkgnames =
+let chroot build update create path bind_ro bind_rw pkgnames =
+  (*TODO eventually change interface to --action, mutually exclusive in definition*)
+  let more_than_one_true a b c =
+    (a && b) || (a && c) || (b && c) in
+  if more_than_one_true build update create then
+    raise (Failure  "More than one of update create and build was selected");
+  
   let (//) = Filename.concat in
   let directory_exists d = Sys.file_exists d && Sys.is_directory d in
 
@@ -348,8 +357,9 @@ let chroot build update create path pkgnames =
   Format.printf "base-packages: %a" pp_string_list base_packages;
 
   if create then
-    if not (directory_exists directory)  then
-      run3 ("sudo", [|"sudo"; "install"; "-d"; directory; "-m"; "755"; "-v" |]);
+    begin
+      if not (directory_exists directory)  then
+        run3 ("sudo", [|"sudo"; "install"; "-d"; directory; "-m"; "755"; "-v" |]);
 
       if not (directory_exists (directory // "root")) then
         run3 ("sudo",
@@ -361,24 +371,65 @@ let chroot build update create path pkgnames =
                 (Format.asprintf "%a" pp_string_list_raw base_packages)|]);
 
 
-  if not (directory_exists (directory // "root")) then
-    raise (Failure (Format.sprintf "chroot: %S is not a directory\n
-                                    chroot: did you run aur choor -create\n"
-                      (directory // "root")));
+      if not (directory_exists (directory // "root")) then
+        raise (Failure (Format.sprintf "chroot: %S is not a directory\n
+                                        chroot: did you run aur choor -create\n"
+                          (directory // "root")));
 
-  let inp = Unix.open_process_args_in "pacman-conf"
-              [|"pacman-conf"; "--config"; pacman_conf|] in
+    end
+  else
+    if update then
+      begin
 
-  (*TODO extract relevant lines*)
-  let rec read_line_by_line ic lines =
-    let line = In_channel.input_line ic in
-    match line with
-    | Some l -> read_line_by_line ic (l::lines)
-    | None -> List.rev lines
-  in
-  let lines = read_line_by_line inp [] in
-  Format.printf "%a" pp_string_list lines;
+        let r = Str.regexp {|Server = file://\(.*\)|} in
+        let inp = Unix.open_process_args_in
+                    "pacman-conf" [|"pacman-conf"; "--config"; pacman_conf|] in
+        let rec find_dirs_to_bindmount_rw ic lines =
+          let line = In_channel.input_line ic in
+          match line with
+          | Some l -> let result = Str.string_match r l 0 in
+                      if result then
+                        find_dirs_to_bindmount_rw ic ((Str.matched_group 1 l)::lines)
+                      else
+                        find_dirs_to_bindmount_rw ic lines
+          | None -> List.rev lines
+        in
+        let bindmounts_from_conf_rw = find_dirs_to_bindmount_rw inp [] in
 
+        if update then
+          let bind_ro = String.concat " "
+                          (List.map (fun b -> "--bind-ro=" ^ b ) bind_ro)
+          in
+          let bind_rw = String.concat " "
+                          (List.map
+                             (fun b_rw -> "--bind-rw=" ^ b_rw)
+                             (List.append bind_rw bindmounts_from_conf_rw))
+          in
+          run3 ("sudo",
+                [|"sudo";
+                  "arch-nspawn";
+                  "-C"; pacman_conf;
+                  "-M"; makepkg_conf;
+                  directory // "root";
+                  bind_rw; bind_ro;
+                  "pacman"; "-Syu"; "--noconfirm";
+                  String.concat " " pkgnames;
+                |])
 
-      (* Format.printf "base packages: %a" pp_string_list_raw base_packages; *)
-(*TODO update and build needs bindmounts_rw arguments*)
+      end
+    else
+      let bind_ro = String.concat " "
+                      (List.map (fun b_ro -> "-D" ^ b_ro) bind_ro) in
+      let bind_rw = String.concat " "
+                      (List.map (fun b_rw -> "-d" ^ b_rw)) in
+      let makechrootpkg_args = "-cu" in
+      let makechrootpkg_makepkg_args = "" in
+      if build then
+        run3("sudo",
+             [|"sudo"; "--preserveenv=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST";
+               "makechrootpkg";
+               "-r"; directory;
+               "makechrootpkg_args";
+               "--";
+               makechroot_makepkg_args;
+             |]])
