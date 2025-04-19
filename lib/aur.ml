@@ -303,7 +303,12 @@ let fetch pkgnames syncmode discard =
 
 exception UsageError of string
 
-let chroot build update create path bind_ro bind_rw pkgnames =
+let chroot
+      build update create path
+      bind_ro bind_rw
+      pkgnames
+      makechrootpkg_args
+      makechrootpkg_makepkg_args
   (*TODO eventually change interface to --action, mutually exclusive in definition*)
   let more_than_one_true a b c =
     (a && b) || (a && c) || (b && c) in
@@ -421,15 +426,15 @@ let chroot build update create path bind_ro bind_rw pkgnames =
       let bind_ro = String.concat " "
                       (List.map (fun b_ro -> "-D" ^ b_ro) bind_ro) in
       let bind_rw = String.concat " "
-                      (List.map (fun b_rw -> "-d" ^ b_rw)) in
-      let makechrootpkg_args = "-cu" in
-      let makechrootpkg_makepkg_args = "" in
+                      (List.map (fun b_rw -> "-d" ^ b_rw) bind_rw) in
+      let makechrootpkg_args = ["-cu"] in
+      let makechrootpkg_makepkg_args = [""] in
       if build then
         run3("sudo",
              [|"sudo"; "--preserveenv=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST";
                "makechrootpkg";
                "-r"; directory;
-               "makechrootpkg_args";
+               String.concat " " makechrootpkg_args;
                "--";
-               makechroot_makepkg_args;
-             |]])
+               String.concat " " makechrootpkg_makepkg_args;
+             |])

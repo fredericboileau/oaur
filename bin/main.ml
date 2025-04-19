@@ -33,9 +33,9 @@ let command =
         ~summary:"Manage containers for building packages"
         [%map_open.Command
            let pkgnames = anon (sequence ("pkgname" %: string)) and
-           build = flag "-B" ~aliases:["--build"] no_arg
-                    ~doc:"Build a package inside the container with makechrootpkg.
-                         Assumes --create was run at least once" and
+           build = flag "-B" ~aliases:["--build"] no_arg ~doc:"
+                Build a package inside the container with makechrootpkg.
+                Assumes --create was run at least once" and
            update = flag "-U" ~aliases:["--update"] no_arg ~doc:"
                 Update or create the /root copy of the container with arch-nspawn" and
            create = flag "--create" no_arg ~doc:"
@@ -44,12 +44,49 @@ let command =
                 and [multilib] is set in the pacman configuration (see --pacman-conf), the
                 multilib-devel package group is also installed. If packages or package groups
                 are ilsted on the command-line, these are installed instead of the above." and
-           path = flag "--path" no_arg ~doc:"Print the path to the container template" and
-           bind_ro = flag "--bind" (listed string) ~doc:"Bind a directory read-only to the container" and
-           bind_rw = flag "--bind-rw" (listed string) ~doc:"Bind a directory read-write to the container" in
-               
-           fun () -> (Aur.chroot build update create path bind_ro bind_rw pkgnames)
+           path = flag "--path" no_arg ~doc:"
+                Print the path to the container template" and
+
+           bind_ro = flag "--bind" (listed string) ~doc:"
+                Bind a directory read-only to the container" and
+           bind_rw = flag "--bind-rw" (listed string) ~doc:"
+                Bind a directory read-write to the container" and
+
+           namcap = flag "-N" ~aliases:["--namcap"] no_arg ~doc:"" and
+           checkpkg = flag "--checkpkg" no_arg ~doc:"" and
+           temp = flag "-T" ~aliases:["--temp"] no_arg ~doc:"" and
+           user = flag "--user" (optional string) ~doc:"" and
+
+           ignorearch = flag "-A" no_arg ~aliases:["--ignorearch"] ~doc:"" and
+           nocheck = flag "---nocheck" no_arg ~doc:"" in
+           let makechrootpkg_makepkg_args_translation =
+             [(ignorearch, "--ignorearch"); (nocheck, "--nocheck")] in
+
+           let makechrootpkg_arg_translation = [(namcap, "-n"); (checkpkg,"-C"); (temp, "-T")] in
+           let rec args_translate lst result =
+             match lst with
+             | (true, translation)::tl -> args_translate tl (translation::result)
+             | (false, _)::tl -> args_translate tl result
+             | [] -> List.rev result
+           in
+           let makechrootpkg_args = args_translate makechrootpkg_arg_translation ["-cu"] in
+           let makechrootpkg_args = match user with
+             | Some user -> List.append makechrootpkg_args ["-U"; user]
+             | None -> makechrootpkg_args
+           in
+           let makechrootpkg_makepkg_args = args_translate makechrootpkg_makepkg_args_translation [] in
+
+           fun () -> Aur.chroot
+                         build update create
+                         path
+                         bind_ro bind_rw
+                         pkgnames
+                         makechrootpkg_args
+                         makechrootpkg_makepkg_args
         ]
+ 
+           
+
 
     in
     Command.group 
