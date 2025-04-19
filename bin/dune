@@ -2,7 +2,7 @@
  (public_name oaur)
  (name main)
  (libraries aur)
- (preprocess (pps ppx_jane lwt_ppx)))
+ (preprocess (pps lwt_ppx ppx_jane)))
 (env
   (dev
     (flags (:standard -warn-error -A))))

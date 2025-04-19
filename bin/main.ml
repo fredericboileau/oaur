@@ -77,8 +77,7 @@ let command =
            let makechrootpkg_makepkg_args = args_translate makechrootpkg_makepkg_args_translation [] in
 
            fun () -> Aur.chroot
-                         build update create
-                         path
+                         build update create path
                          bind_ro bind_rw
                          pkgnames
                          makechrootpkg_args

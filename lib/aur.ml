@@ -309,6 +309,7 @@ let chroot
       pkgnames
       makechrootpkg_args
       makechrootpkg_makepkg_args
+  =
   (*TODO eventually change interface to --action, mutually exclusive in definition*)
   let more_than_one_true a b c =
     (a && b) || (a && c) || (b && c) in
@@ -327,7 +328,6 @@ let chroot
   in
 
   let machine = String.trim (run_read_all ("uname", [|"uname"; "-m"|])) in
-  Printf.printf "%s" machine;
 
   let etcdir = "/etc/aurutils" in
   let shrdir = "/usr/share/devtools" in
@@ -345,24 +345,21 @@ let chroot
   let pacman_conf = default_first default_pacman_paths in
   let makepkg_conf = default_first default_makepkg_paths in
 
-
   (* let aur_pacman_auth = [|"sudo"; "--preserve-env=GNUGPGHOME,SSH_AUTH_SOCK,PKGDEST"|] in *)
-  let base_packages =
-    if pkgnames <> [] then
-      pkgnames
-    else
-      let multilib_in_conf = run_read_all
-                               ("pacini",
-                                [|"pacini"; "--section=multilib"; pacman_conf|]) in
-      if multilib_in_conf <> "" && machine = "x86_64" then
-        ["base-devel"; "multilib-devel"]
-      else
-        ["base-devel"]
-  in
-  Format.printf "base-packages: %a" pp_string_list base_packages;
-
   if create then
     begin
+      let base_packages =
+        if pkgnames <> [] then
+          pkgnames
+        else
+          let multilib_in_conf = run_read_all
+                                   ("pacini",
+                                    [|"pacini"; "--section=multilib"; pacman_conf|]) in
+          if multilib_in_conf <> "" && machine = "x86_64" then
+            ["base-devel"; "multilib-devel"]
+          else
+            ["base-devel"]
+      in
       if not (directory_exists directory)  then
         run3 ("sudo", [|"sudo"; "install"; "-d"; directory; "-m"; "755"; "-v" |]);
 
@@ -423,18 +420,18 @@ let chroot
 
       end
     else
+      (* if build *)
       let bind_ro = String.concat " "
                       (List.map (fun b_ro -> "-D" ^ b_ro) bind_ro) in
       let bind_rw = String.concat " "
                       (List.map (fun b_rw -> "-d" ^ b_rw) bind_rw) in
-      let makechrootpkg_args = ["-cu"] in
-      let makechrootpkg_makepkg_args = [""] in
-      if build then
-        run3("sudo",
-             [|"sudo"; "--preserveenv=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST";
-               "makechrootpkg";
-               "-r"; directory;
-               String.concat " " makechrootpkg_args;
-               "--";
-               String.concat " " makechrootpkg_makepkg_args;
-             |])
+      print_endline (String.concat " " makechrootpkg_args);
+      print_endline (String.concat " " makechrootpkg_makepkg_args);
+      (* run3("sudo", *)
+      (*      [|"sudo"; "--preserveenv=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST"; *)
+      (*        "makechrootpkg"; *)
+      (*        "-r"; directory; *)
+      (*        String.concat " " makechrootpkg_args; *)
+      (*        "--"; *)
+      (*        String.concat " " makechrootpkg_makepkg_args; *)
+      (*      |]) *)
