@@ -61,6 +61,10 @@ let search term  =
     Cohttp_lwt.Body.to_string body
   in
   let display_search_results body =
+    let st = "\o033\\" in
+    let osc8 = "\o033]8" in
+
+
     let open Yojson.Basic in
     let open Yojson.Basic.Util in
     let results =  from_string body |> member "results" |> to_list in
@@ -73,9 +77,18 @@ let search term  =
         let ood = match (member "OutOfDate" json |> to_number_option) with
           | None -> ""
           | Some epoch -> Core_unix.strftime (Core_unix.gmtime epoch) "(Out-of-date: %d %B %Y)" in
-        let results_frmt: _ format =
-          "@{<bold>@{<blue>aur@}/%s @{<green>%s@}@} (+%s %.2f%%) @{<bold;red>%s@}\n    %s\n"  in
-        Ocolor_format.printf results_frmt name ver numvotes popularity ood descr
+
+        (*add osc8 style link*)
+        let fmt = Format.get_str_formatter () in Ocolor_format.prettify_formatter fmt;
+        Format.fprintf fmt "@{<bold>@{<blue>aur@}/%s@}" name;
+        let pre = Format.flush_str_formatter () in
+        (* (\* # OSC8;;URI ST <name> OSC8;;ST ) *\) *)
+        let pre = Format.asprintf "%s;;%s%s%s%s;;%s"
+                    osc8 (aur_location ^ "/packages/" ^ name) st pre osc8 st in
+
+        let rest_fmt : _ format =
+          "%s @{<bold>@{<green>%s@}@} (+%s %.2f%%) @{<bold;red>%s@}\n    %s\n" in
+        Ocolor_format.printf rest_fmt pre ver numvotes popularity ood descr
       )
       results
   in
