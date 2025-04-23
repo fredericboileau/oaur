@@ -11,33 +11,6 @@ let aur_location = "https://aur.archlinux.org"
 let aur_rpc_ver = 5
 let ua_header = Header.init_with "User-Agent" "oaur"
 
-(*pretty printing*)
-
-let pp_string_list fmt lst =
-  let open Format in
-  fprintf fmt "[%a]"
-    (pp_print_list ~pp_sep:(fun ppf () -> fprintf ppf "; ") pp_print_string)
-    lst
-
-let pp_string_list_raw fmt lst =
-  let open Format in
-  fprintf fmt "%a"
-    (pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt " ") pp_print_string)
-
-    lst
-
-let pp_array printer fmt arr =
-  Array.iteri (fun i x ->
-    if i > 0 then Format.fprintf fmt " ";
-    Format.fprintf fmt "%a" printer x
-  ) arr
-
-let array_to_string arr =
-  Format.asprintf "%a" (pp_array Format.pp_print_string) arr
-
-let string_of_list lst =
-  String.concat " " lst
-
 
 exception SubExn of string
 (*TODO how to redirect stdout to stderr*)
@@ -50,10 +23,6 @@ let run command =
   | Unix.WEXITED 0 -> Lwt.return()
   | _ -> raise (SubExn "Subprocess error")
 
-let run2 command =
-  match  (Unix.system (array_to_string command)) with
-  | Unix.WEXITED 0 -> ()
-  | _ -> raise (SubExn "Subprocess error")
 
 let run3 (command, args) =
   let (_,status) = Unix.waitpid [] (Unix.create_process
@@ -62,6 +31,11 @@ let run3 (command, args) =
   | Unix.WEXITED 0 -> ()
   | Unix.WEXITED code -> raise (SubExn (Printf.sprintf "Subprocess exited with code %d" code))
   | _ -> raise (SubExn "Subprocess error")
+
+let run2 (command,args) =
+  print_endline command;
+  print_endline (String.concat " "  (Array.to_list args));
+  run3(command,args)
 
 let run_read_all (cmd,args) =
   let inp = Unix.open_process_args_in cmd args in
@@ -370,7 +344,8 @@ let chroot
                 "-C"; pacman_conf;
                 "-M"; makepkg_conf;
                 directory // "root";
-                (Format.asprintf "%a" pp_string_list_raw base_packages)|]);
+                (String.concat " " base_packages)
+              |]);
 
 
       if not (directory_exists (directory // "root")) then
@@ -404,19 +379,23 @@ let chroot
         in
         let bind_rw = String.concat " "
                         (List.map
-                           (fun b_rw -> "--bind-rw=" ^ b_rw)
+                           (fun b_rw -> "--bind=" ^ b_rw)
                            (List.append bind_rw bindmounts_from_conf_rw))
         in
-        run3 ("sudo",
-              [|"sudo";
-                "arch-nspawn";
-                "-C"; pacman_conf;
-                "-M"; makepkg_conf;
-                directory // "root";
-                bind_rw; bind_ro;
-                "pacman"; "-Syu"; "--noconfirm";
-                String.concat " " pkgnames;
-              |])
+        let args =
+          List.filter (fun str -> str <> "")
+            ["sudo";
+             "arch-nspawn";
+             "-C"; pacman_conf;
+             "-M"; makepkg_conf;
+             directory // "root";
+             bind_rw;
+             bind_ro;
+             "pacman"; "-Syu"; "--noconfirm";
+             (String.concat " " pkgnames)
+            ]
+        in
+        run3 ("sudo", Array.of_list args)
 
       end
     else
@@ -425,22 +404,15 @@ let chroot
                       (List.map (fun b_ro -> "-D" ^ b_ro) bind_ro) in
       let bind_rw = String.concat " "
                       (List.map (fun b_rw -> "-d" ^ b_rw) bindmounts_from_conf_rw) in
-      print_endline (String.concat " " makechrootpkg_args);
-      print_endline (String.concat " " makechrootpkg_makepkg_args);
-      print_endline (String.concat " "
-                       ["sudo"; "--preserve-env=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST";
-                        "makechrootpkg";
-                        "-r"; directory;
-                        bind_ro; bind_rw;
-                        String.concat " " makechrootpkg_args;
-                        "--";
-                        String.concat " " makechrootpkg_makepkg_args;]);
-      run3("sudo",
-           [|"sudo"; "--preserve-env=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST";
-             "makechrootpkg";
-             "-r"; directory;
-             bind_ro; bind_rw;
-             String.concat " " makechrootpkg_args;
-             "--";
-             String.concat " " makechrootpkg_makepkg_args;
-           |])
+      let args =
+        List.filter (fun str -> str <> "")
+          ["sudo"; "--preserve-env=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST";
+           "makechrootpkg";
+           "-r"; directory;
+           bind_ro; bind_rw;
+           String.concat " " makechrootpkg_args;
+           "--";
+           String.concat " " makechrootpkg_makepkg_args;
+          ]
+      in
+      run3("sudo", Array.of_list args)
