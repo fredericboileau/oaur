@@ -37,12 +37,6 @@ let run2 (command,args) =
   print_endline (String.concat " "  (Array.to_list args));
   run3(command,args)
 
-let run_noexn (command,args) =
-  let (_, status) =
-    Unix.waitpid []
-      (Unix.create_process command args Unix.stdin Unix.stderr Unix.stderr) in
-  status
-
 let run_read_all (cmd,args) =
   let inp = Unix.open_process_args_in cmd args in
   let r = In_channel.input_all inp in
@@ -180,50 +174,54 @@ let depends pkgname =
 
 
 
-let fetch_exn syncmode discard pkgname  = 
+let fetch_exn pkgname syncmode discard = 
+  let open Lwt.Syntax in
   let pkglocation = aur_location ^ "/" ^ pkgname in
   let command = ("git", [|"git";"ls-remote"; "--exit-code"; pkglocation|]) in
-  let status = run_noexn command in
-  match status with
-  | Unix.WEXITED 0 -> ()
-  | Unix.WEXITED _ -> raise (SubExn (Printf.sprintf "Pkg %s is not in AUR\n" pkgname))
-  | _ -> raise (SubExn "Subprocess error");
+  let* p = Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null command in
+  let* () = match p with
+    | Unix.WEXITED 0 -> Lwt.return()
+    | Unix.WEXITED _ -> raise (SubExn (Printf.sprintf "Pkg %s is not in AUR\n" pkgname))
+    | _ -> raise (SubExn "Subprocess error")
+  in
 
   let pathtocheck = Filename.concat pkgname ".git" in
   let pathclean = not (Sys.file_exists pathtocheck && Sys.is_directory pathtocheck) in
-
   (*TODO add results file? *)
 
   if pathclean then
-    run3 ("git", [|"git"; "clone"; pkglocation|])
+
+    let* () = run ("git", [|"git"; "clone"; pkglocation|])
+    in Lwt.return()
 
   else
     let git = [|"git"; "-C"; pkgname|] in 
     let (@@) = Array.append in
     let sync_should_merge upstream dest =
-      let status =
-        run_noexn("git", git @@ [|"merge-base"; "--is-ancestor"; upstream; dest|] )
+      let* p =
+        Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null
+          ("git", git @@ [|"merge-base"; "--is-ancestor"; upstream; dest|] )
       in
-      match status with
-      | Unix.WEXITED 0 -> false
-      | Unix.WEXITED 1 -> true
+      match p with
+      | Unix.WEXITED 0 -> Lwt.return(false)
+      | Unix.WEXITED 1 -> Lwt.return(true)
       | _ -> raise (SubExn "git merge-base error")
 
     in (* sync code goes here*)
 
-    Printf.printf "git directory for %s exists already, acquiring lock" pkgname;
+    let* () = Lwt_io.printlf "git directory for %s exists already, acquiring lock" pkgname in
     (*TODO check for --timeout*)
     (* let fd = Unix.openfile pathtocheck [Unix.O_RDONLY] 0o640 in *)
     (* Flock.flock fd LOCK_EX; *)
 
-    run3("git", git @@ [|"fetch"; "origin"|]);
+    let*() = run ("git", git @@ [|"fetch"; "origin"|]) in
 
-    let orig_head = String.trim(
-                         run_read_all("git", git @@ [|"rev-parse"; "--verify"; "HEAD"|])) in
+    let* orig_head = Lwt_process.pread_line ("git", git @@ [|"rev-parse"; "--verify"; "HEAD"|]) in
     Printf.printf "%s\n" orig_head;
 
-    let should_merge = sync_should_merge "origin/HEAD" "HEAD" in
-    let upstream = "origin/HEAD" in
+    let* should_merge = sync_should_merge "origin/HEAD" "HEAD" in
+    let* () =
+      let upstream = "origin/HEAD" in
       if should_merge then
         let syncmode = Option.value ~default:("merge") syncmode in
         let dest = match syncmode with
@@ -231,24 +229,38 @@ let fetch_exn syncmode discard pkgname  =
           | "reset" | "fetch" -> upstream
           | badsyncmode -> failwith (Printf.sprintf "Bad syncmode: %s" badsyncmode)
         in
-        try
+        try%lwt
           match syncmode with
           | "merge"  ->
+            let* () =
               if discard then
-               run3("git", git @@ [|"checkout"; "./"|]);
-            run3("git", git @@ [|"merge"; upstream|]);
+               run("git", git @@ [|"checkout"; "./"|])
+            else
+              Lwt.return()
+            in
+            run("git", git @@ [|"merge"; upstream|])
           | "rebase" ->
+            let%lwt () =
               if discard then
-               run3("git", git @@ [|"checkout"; "./"|]);
-            run3("git", git @@ [|"rebase"; upstream|]);
-          | "reset"  -> run3("git", git @@ [|"reset"; "--hard"; dest|])
-          | "fetch"  -> ()
+               run("git", git @@ [|"checkout"; "./"|])
+            else
+              Lwt.return()
+            in
+            run ("git", git @@ [|"rebase"; upstream|])
+
+          | "reset"  -> run ("git", git @@ [|"reset"; "--hard"; dest|])
+          | "fetch"  -> Lwt.return()
           | badsyncmode ->
             failwith (Printf.sprintf "Bad syncmode: %s" badsyncmode)
+
         with SubExn _ ->
           raise (SubExn (Printf.sprintf "fetch: failed to %s %s" syncmode pkgname))
+      else
+        Lwt.return()
+    in
 
     (* Flock.flock fd LOCK_UN; *)
+    Lwt.return()
 
 
 (*spec: if --recurse passed use depends with a tsort algo *)
@@ -257,10 +269,8 @@ let fetch_exn syncmode discard pkgname  =
 (*TODO cli should pass list*)
  
 let fetch pkgnames syncmode discard =
-  try
-    List.iter (fetch_exn syncmode discard) pkgnames
-  with
-    SubExn msg -> Printf.printf "Error: %s" msg
+  try%lwt fetch_exn (List.hd pkgnames) syncmode discard
+  with SubExn msg -> Printf.printf "Error: %s" msg; Lwt.return()
 
 
 
@@ -283,12 +293,12 @@ let chroot
   let (//) = Filename.concat in
   let directory_exists d = Sys.file_exists d && Sys.is_directory d in
 
+  let string_of_string_list lst = "[" ^ String.concat "; " lst ^ "]" in
   let rec default_first lst =
     match lst with
     | hd::tl  -> if Sys.file_exists hd then hd else default_first tl
-    | [] -> raise (Failure
-                     (Printf.sprintf "A required file is missing in the list: %s"
-                        (String.concat " " lst)))
+    | [] -> raise (Failure (Printf.sprintf "A required file is missing in the list: %s"
+                             (string_of_string_list lst)))
   in
 
   let machine = String.trim (run_read_all ("uname", [|"uname"; "-m"|])) in
@@ -372,20 +382,22 @@ let chroot
                            (fun b_rw -> "--bind=" ^ b_rw)
                            (List.append bind_rw bindmounts_from_conf_rw))
         in
-        let args =
-          List.filter (fun str -> str <> "")
-            ["sudo";
-             "arch-nspawn";
-             "-C"; pacman_conf;
-             "-M"; makepkg_conf;
-             directory // "root";
-             bind_rw;
-             bind_ro;
-             "pacman"; "-Syu"; "--noconfirm";
-             (String.concat " " pkgnames)
-            ]
-        in
-        run3 ("sudo", Array.of_list args)
+        let command =
+          Array.append(
+              [|"sudo";
+                "arch-nspawn";
+                "-C"; pacman_conf;
+                "-M"; makepkg_conf;
+                directory // "root";
+                bind_rw; bind_ro;
+                "pacman"; "-Syu"; "--noconfirm";|] 
+                if pkgnames <> []
+                                 String.concat " " pkgnames
+                   else [||]
+
+        
+        run2 ("sudo", command)
+        print_endline "after"
 
       end
     else
@@ -394,15 +406,20 @@ let chroot
                       (List.map (fun b_ro -> "-D" ^ b_ro) bind_ro) in
       let bind_rw = String.concat " "
                       (List.map (fun b_rw -> "-d" ^ b_rw) bindmounts_from_conf_rw) in
-      let args =
-        List.filter (fun str -> str <> "")
-          ["sudo"; "--preserve-env=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST";
-           "makechrootpkg";
-           "-r"; directory;
-           bind_ro; bind_rw;
-           String.concat " " makechrootpkg_args;
-           "--";
-           String.concat " " makechrootpkg_makepkg_args;
-          ]
-      in
-      run3("sudo", Array.of_list args)
+      print_endline (String.concat " "
+                       ["sudo"; "--preserve-env=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST";
+                        "makechrootpkg";
+                        "-r"; directory;
+                        bind_ro; bind_rw;
+                        String.concat " " makechrootpkg_args;
+                        "--";
+                        String.concat " " makechrootpkg_makepkg_args;]);
+      run3("sudo",
+           [|"sudo"; "--preserve-env=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST";
+             "makechrootpkg";
+             "-r"; directory;
+             bind_ro; bind_rw;
+             String.concat " " makechrootpkg_args;
+             "--";
+             String.concat " " makechrootpkg_makepkg_args;
+           |])

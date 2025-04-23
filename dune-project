@@ -20,8 +20,8 @@
  (synopsis "Archlinux User Repository helper")
  (description "Rewrite of aurutils functionalities in ocaml")
  (depends async ocaml dune core 
-          core_unix uri cohttp-lwt-unix
-          ocolor yojson lwt-ppx)
+          core_unix uri cohttp-lwt-unix tls-lwt
+          ocolor yojson)
  (tags
   (topics "to describe" your project)))
 

@@ -25,7 +25,7 @@ let fetch =
                           ~doc:"syncmode when fetching aur repo" and
            discard = flag "--discard" no_arg
                          ~doc:"discard local changes when syncing" in
-           fun () -> Lwt_main.run (Aur.fetch pkgnames syncmode discard)]
+           fun () -> Aur.fetch pkgnames syncmode discard]
 
 let chroot =
       Command.basic

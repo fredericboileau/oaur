@@ -8,3 +8,4 @@ logs
 *.hi
 *.cmd
 *.out
+_opam

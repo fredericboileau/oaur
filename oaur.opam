@@ -17,9 +17,9 @@ depends: [
   "core_unix"
   "uri"
   "cohttp-lwt-unix"
+  "tls-lwt"
   "ocolor"
   "yojson"
-  "lwt-ppx"
   "odoc" {with-doc}
 ]
 build: [
