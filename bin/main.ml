@@ -47,6 +47,10 @@ let command =
            path = flag "--path" no_arg ~doc:"
                 Print the path to the container template" and
 
+           directory = flag "-D" ~aliases:["--directory"] (optional string) ~doc:"
+                The base directory for containers. Defaults to /var/lib/aurbuild/<machine>.
+                This directory usually contains a /root subdirectory that serves as a template for user containers (named after $SUDO_USER or /copy if unset).
+                Note: If the -T parameter is specified to makechrootpkg, the user container has a random name and is removed on build completion." and
            bind_ro = flag "--bind" (listed string) ~doc:"
                 Bind a directory read-only to the container" and
            bind_rw = flag "--bind-rw" (listed string) ~doc:"
@@ -57,24 +61,47 @@ let command =
            temp = flag "-T" ~aliases:["--temp"] no_arg ~doc:"" and
            user = flag "--user" (optional string) ~doc:"" and
 
-           ignorearch = flag "-A" no_arg ~aliases:["--ignorearch"] ~doc:"" and
-           nocheck = flag "---nocheck" no_arg ~doc:"" in
-           let makechrootpkg_makepkg_args_translation =
-             [(ignorearch, "--ignorearch"); (nocheck, "--nocheck")] in
+           ignorearch = flag "-A" ~aliases:["--ignorearch"]  no_arg ~doc:"" and
+           nocheck = flag "---nocheck" no_arg ~doc:"" and
 
-           let makechrootpkg_arg_translation = [(namcap, "-n"); (checkpkg,"-C"); (temp, "-T")] in
+           cargs = flag "--cargs" ~aliases:["--makechrootpkg-args"] (optional string) ~doc:"
+                 Arguments (comma-separated) to be passed to makchrootpkg for --build. Defaults to makechrootpkg -cu" and
+           margs = flag "--margs" ~aliases:["--makepkg-args"] (optional string) ~doc:"
+                Additional (comma-separated) makepkg arguments for makechrootpk. A default list of makepkg(8)
+                arguments can be listed with makechrootpkg --help" in
+
            let rec args_translate lst result =
              match lst with
              | (true, translation)::tl -> args_translate tl (translation::result)
              | (false, _)::tl -> args_translate tl result
              | [] -> List.rev result
            in
-           let makechrootpkg_args = args_translate makechrootpkg_arg_translation ["-cu"] in
+           let makechrootpkg_makepkg_args_translation =
+               [(ignorearch, "--ignorearch"); (nocheck, "--nocheck")] in
+
+           let makechrootpkg_arg_translation =
+             [(namcap, "-n"); (checkpkg,"-C"); (temp, "-T")] in
+
+           let makechrootpkg_args_init = "-cu" ::
+                                           match cargs with
+                                           | Some str -> (String.split ~on:',' str)
+                                           | None -> []
+           in
+           let makechrootpkg_makepgkg_args_init = match margs with
+             | Some str -> String.split ~on:',' str
+             | None -> []
+           in
+
+           let makechrootpkg_args = args_translate
+                                        makechrootpkg_arg_translation
+                                        makechrootpkg_args_init in
            let makechrootpkg_args = match user with
              | Some user -> List.append makechrootpkg_args ["-U"; user]
              | None -> makechrootpkg_args
            in
-           let makechrootpkg_makepkg_args = args_translate makechrootpkg_makepkg_args_translation [] in
+           let makechrootpkg_makepkg_args = args_translate
+                                                makechrootpkg_makepkg_args_translation
+                                                makechrootpkg_makepgkg_args_init in
 
            fun () -> Aur.chroot
                          build update create path

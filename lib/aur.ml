@@ -427,11 +427,12 @@ let chroot
                       (List.map (fun b_rw -> "-d" ^ b_rw) bind_rw) in
       print_endline (String.concat " " makechrootpkg_args);
       print_endline (String.concat " " makechrootpkg_makepkg_args);
-      (* run3("sudo", *)
-      (*      [|"sudo"; "--preserveenv=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST"; *)
-      (*        "makechrootpkg"; *)
-      (*        "-r"; directory; *)
-      (*        String.concat " " makechrootpkg_args; *)
-      (*        "--"; *)
-      (*        String.concat " " makechrootpkg_makepkg_args; *)
-      (*      |]) *)
+      run3("sudo",
+           [|"sudo"; "--preserve-env=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST";
+             "makechrootpkg";
+             "-r"; directory;
+             bind_ro; bind_rw;
+             String.concat " " makechrootpkg_args;
+             "--";
+             String.concat " " makechrootpkg_makepkg_args;
+           |])
