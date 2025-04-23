@@ -380,43 +380,43 @@ let chroot
 
     end
   else
+    let r = Str.regexp {|Server = file://\(.*\)|} in
+    let inp = Unix.open_process_args_in
+                "pacman-conf" [|"pacman-conf"; "--config"; pacman_conf|] in
+    let rec find_dirs_to_bindmount_rw ic lines =
+      let line = In_channel.input_line ic in
+      match line with
+      | Some l -> let result = Str.string_match r l 0 in
+                  if result then
+                    find_dirs_to_bindmount_rw ic ((Str.matched_group 1 l)::lines)
+                  else
+                    find_dirs_to_bindmount_rw ic lines
+      | None -> List.rev lines
+    in
+    let bindmounts_from_conf_rw = find_dirs_to_bindmount_rw inp [] in
+
     if update then
       begin
 
-        let r = Str.regexp {|Server = file://\(.*\)|} in
-        let inp = Unix.open_process_args_in
-                    "pacman-conf" [|"pacman-conf"; "--config"; pacman_conf|] in
-        let rec find_dirs_to_bindmount_rw ic lines =
-          let line = In_channel.input_line ic in
-          match line with
-          | Some l -> let result = Str.string_match r l 0 in
-                      if result then
-                        find_dirs_to_bindmount_rw ic ((Str.matched_group 1 l)::lines)
-                      else
-                        find_dirs_to_bindmount_rw ic lines
-          | None -> List.rev lines
-        in
-        let bindmounts_from_conf_rw = find_dirs_to_bindmount_rw inp [] in
 
-        if update then
-          let bind_ro = String.concat " "
-                          (List.map (fun b -> "--bind-ro=" ^ b ) bind_ro)
-          in
-          let bind_rw = String.concat " "
-                          (List.map
-                             (fun b_rw -> "--bind-rw=" ^ b_rw)
-                             (List.append bind_rw bindmounts_from_conf_rw))
-          in
-          run3 ("sudo",
-                [|"sudo";
-                  "arch-nspawn";
-                  "-C"; pacman_conf;
-                  "-M"; makepkg_conf;
-                  directory // "root";
-                  bind_rw; bind_ro;
-                  "pacman"; "-Syu"; "--noconfirm";
-                  String.concat " " pkgnames;
-                |])
+        let bind_ro = String.concat " "
+                        (List.map (fun b -> "--bind-ro=" ^ b ) bind_ro)
+        in
+        let bind_rw = String.concat " "
+                        (List.map
+                           (fun b_rw -> "--bind-rw=" ^ b_rw)
+                           (List.append bind_rw bindmounts_from_conf_rw))
+        in
+        run3 ("sudo",
+              [|"sudo";
+                "arch-nspawn";
+                "-C"; pacman_conf;
+                "-M"; makepkg_conf;
+                directory // "root";
+                bind_rw; bind_ro;
+                "pacman"; "-Syu"; "--noconfirm";
+                String.concat " " pkgnames;
+              |])
 
       end
     else
@@ -424,9 +424,17 @@ let chroot
       let bind_ro = String.concat " "
                       (List.map (fun b_ro -> "-D" ^ b_ro) bind_ro) in
       let bind_rw = String.concat " "
-                      (List.map (fun b_rw -> "-d" ^ b_rw) bind_rw) in
+                      (List.map (fun b_rw -> "-d" ^ b_rw) bindmounts_from_conf_rw) in
       print_endline (String.concat " " makechrootpkg_args);
       print_endline (String.concat " " makechrootpkg_makepkg_args);
+      print_endline (String.concat " "
+                       ["sudo"; "--preserve-env=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST";
+                        "makechrootpkg";
+                        "-r"; directory;
+                        bind_ro; bind_rw;
+                        String.concat " " makechrootpkg_args;
+                        "--";
+                        String.concat " " makechrootpkg_makepkg_args;]);
       run3("sudo",
            [|"sudo"; "--preserve-env=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST";
              "makechrootpkg";
