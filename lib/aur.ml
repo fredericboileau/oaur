@@ -1,20 +1,14 @@
-(*TODO simple subprocess*)
 
-(* open Lwt *)
-open Cohttp
-(* open Cohttp_lwt_unix *)
-(* open Lwt.Syntax *)
+open Lwt.Syntax
 
-(* TODO: check how alad installs pacman deps *)
 
 let aur_location = "https://aur.archlinux.org"
 let aur_rpc_ver = 5
-let ua_header = Header.init_with "User-Agent" "oaur"
+let ua_header = Cohttp.Header.init_with "User-Agent" "oaur"
 
+(* TODO: check how alad installs pacman deps *)
 
 exception SubExn of string
-(*TODO how to redirect stdout to stderr*)
-
 
 let run (command, args) =
   let args_array = Array.of_list(List.filter (fun str -> str <> "" ) args) in
@@ -25,11 +19,6 @@ let run (command, args) =
   | Unix.WEXITED code -> raise (SubExn (Printf.sprintf "Subprocess exited with code %d" code))
   | _ -> raise (SubExn "Subprocess error")
 
-let run2 (command,args) =
-  print_endline command;
-  print_endline (String.concat " "  (args));
-  run(command,args)
-
 let run_noexn (command,args) =
   let args_array = Array.of_list(List.filter (fun str -> str <> "" ) args) in
   let (_, status) =
@@ -37,11 +26,13 @@ let run_noexn (command,args) =
       (Unix.create_process command args_array Unix.stdin Unix.stderr Unix.stderr) in
   status
 
+
 let run_read_all (cmd,args) =
   let args_array = Array.of_list(List.filter (fun str -> str <> "") args) in
   let inp = Unix.open_process_args_in cmd args_array in
   let r = In_channel.input_all inp in
   In_channel.close inp; r
+
 
 let search term  =
   let build_query term  =
@@ -84,10 +75,12 @@ let search term  =
           "%s @{<bold>@{<green>%s@}@} (+%s %.2f%%) @{<bold;red>%s@}\n    %s\n" in
         Ocolor_format.printf rest_fmt pre ver numvotes popularity ood descr
       )
-      results
+      results;
+    Lwt.return()
   in
-  let open Lwt in
-  build_query term |> search_aur >|= fun body -> display_search_results body
+  let open Lwt.Syntax in
+  let* body = build_query term |> search_aur in
+  display_search_results body
 
 let fetch_deps pkgname =
   let build_query pkgname =
@@ -99,7 +92,7 @@ let fetch_deps pkgname =
   let query_aur query =
     let open Lwt.Syntax in
     let open Cohttp_lwt_unix in
-    let*(_,body) = Client.get ?headers:(Some ua_header) query in
+    let* (_,body) = Client.get ?headers:(Some ua_header) query in
     Cohttp_lwt.Body.to_string body
   in
   let extract_results body =
@@ -108,24 +101,11 @@ let fetch_deps pkgname =
     |> member "results" |> to_list |> List.hd
     |> member "Depends" |> to_list |> List.map to_string
   in
-  let open Lwt in
-  build_query pkgname |> query_aur >|= fun body -> extract_results body
+  let query = build_query pkgname in
+  let* body = query_aur query in
+  Lwt.return(extract_results body)
 
 
-
-(* TODO wrap this in tree like structure *)
-type check_if_repo = { pkgname: string; status: Unix.process_status }
-type classify_deps = { repo: string list; aur: string list; other: check_if_repo list }
-
-
-let check_if_repo pkgname =
-  let open Lwt.Syntax in
-  let command pkgname = ("", [|"pacman";"-Sqi"; pkgname|]) in
-  let* p  =  Lwt_process.exec ~stdout:`Dev_null ~stderr:`Dev_null (command pkgname) 
-  in Lwt.return({ pkgname; status = p })
-
-
-(*TODO simplify monads*)
 let check_if_aur pkgname =
   let build_query pkgname =
     let aururl = Uri.of_string aur_location in
@@ -134,9 +114,8 @@ let check_if_aur pkgname =
     Uri.add_query_param url ("arg[]", [pkgname])
   in
   let check_rpc query =
-    let open Lwt.Syntax in
-    let open Cohttp_lwt_unix in
-    let*(_,body) = Client.get ?headers:(Some ua_header) query in
+    let* (_,body) = Cohttp_lwt_unix.Client.get
+                      ?headers:(Some ua_header) query in
     Cohttp_lwt.Body.to_string body
   in
   let extract_result body =
@@ -146,25 +125,27 @@ let check_if_aur pkgname =
     in
     if resultcount > 1 then true else false
   in
-  let open Lwt in
-  build_query pkgname |> check_rpc >|= fun body -> extract_result body
+  let query = build_query pkgname in
+  let* body = check_rpc query in
+  Lwt.return(extract_result body)
 
 
 let classify_deps results =
   let open Lwt in
-  let rec classify_deps_aux results repo aur other =
-    match results with
-    | hd::tl ->
-      (match hd.status with
-       | Unix.WEXITED 0 -> classify_deps_aux tl (hd.pkgname::repo) aur other
-       | Unix.WEXITED _ -> check_if_aur hd.pkgname
-         >>= fun isaur ->
+  let rec classify_deps_aux pkgnames repo aur other =
+    match pkgnames with
+    | pkgname::tl ->
+      let pacman_status = run_noexn("pacman",["pacman"; "-Sqi"; pkgname]) in
+      (match pacman_status with
+       | Unix.WEXITED 0 -> classify_deps_aux tl (pkgname::repo) aur other
+       | Unix.WEXITED _ ->
+         let* isaur = check_if_aur pkgname in
          if isaur then
-           classify_deps_aux tl repo (hd.pkgname::aur) other
+           classify_deps_aux tl repo (pkgname::aur) other
          else
-           classify_deps_aux tl repo aur (hd::other)
-       | _ -> classify_deps_aux tl repo aur (hd::other))
-    | [] -> Lwt.return({repo;aur;other})
+           classify_deps_aux tl repo aur (pkgname::other)
+       | _ -> classify_deps_aux tl repo aur (pkgname::other))
+    | [] -> Lwt.return(repo,aur,other)
   in
   classify_deps_aux results [] [] []
 
@@ -174,14 +155,13 @@ let classify_deps results =
 let depends pkgname =
   let open Lwt.Syntax in
   let* deps = fetch_deps pkgname in
-  let* results = Lwt.all (List.map check_if_repo deps) in
-  let* classified = classify_deps results in
+  let* (repo,aur,other) = classify_deps deps in
   Printf.printf "repo pkgs: \n";
-  List.iter (fun r -> Printf.printf "  %s\n" r) classified.repo;
+  List.iter (fun r -> Printf.printf "  %s\n" r) repo;
   Printf.printf "aur pkgs: \n";
-  List.iter (fun r -> Printf.printf "  %s\n" r) classified.aur;
+  List.iter (fun r -> Printf.printf "  %s\n" r) aur;
   Printf.printf "other pkgs: \n";
-  List.iter (fun r -> Printf.printf "  %s\n" r.pkgname) classified.other;
+  List.iter (fun r -> Printf.printf "  %s\n" r) other;
   Lwt.return()
 
 
@@ -189,7 +169,7 @@ let depends pkgname =
 
 let fetch_exn syncmode discard pkgname  = 
   let pkglocation = aur_location ^ "/" ^ pkgname in
-  let command = ("git", [|"git";"ls-remote"; "--exit-code"; pkglocation|]) in
+  let command = ("git", ["git";"ls-remote"; "--exit-code"; pkglocation]) in
   let status = run_noexn command in
   match status with
   | Unix.WEXITED 0 -> ()
@@ -206,10 +186,10 @@ let fetch_exn syncmode discard pkgname  =
 
   else
     let git = ["git"; "-C"; pkgname] in 
-    let (@@) = List.append in
+    let (@) = List.append in
     let sync_should_merge upstream dest =
       let status =
-        run_noexn("git", git @@ ["merge-base"; "--is-ancestor"; upstream; dest] )
+        run_noexn("git", git @ ["merge-base"; "--is-ancestor"; upstream; dest] )
       in
       match status with
       | Unix.WEXITED 0 -> false
@@ -219,14 +199,14 @@ let fetch_exn syncmode discard pkgname  =
     in (* sync code goes here*)
 
     Printf.printf "git directory for %s exists already, acquiring lock" pkgname;
-    (*TODO check for --timeout*)
+    (*TODO write new wrapper of flock*)
     (* let fd = Unix.openfile pathtocheck [Unix.O_RDONLY] 0o640 in *)
     (* Flock.flock fd LOCK_EX; *)
 
-    run("git", git @@ ["fetch"; "origin"]);
+    run("git", git @ ["fetch"; "origin"]);
 
     let orig_head = String.trim(
-                         run_read_all("git", git @@ ["rev-parse"; "--verify"; "HEAD"])) in
+                         run_read_all("git", git @ ["rev-parse"; "--verify"; "HEAD"])) in
     Printf.printf "%s\n" orig_head;
 
     let should_merge = sync_should_merge "origin/HEAD" "HEAD" in
@@ -242,13 +222,13 @@ let fetch_exn syncmode discard pkgname  =
           match syncmode with
           | "merge"  ->
               if discard then
-               run("git", git @@ ["checkout"; "./"]);
-            run("git", git @@ ["merge"; upstream]);
+               run("git", git @ ["checkout"; "./"]);
+            run("git", git @ ["merge"; upstream]);
           | "rebase" ->
               if discard then
-               run("git", git @@ ["checkout"; "./"]);
-            run("git", git @@ ["rebase"; upstream]);
-          | "reset"  -> run("git", git @@ ["reset"; "--hard"; dest])
+               run("git", git @ ["checkout"; "./"]);
+            run("git", git @ ["rebase"; upstream]);
+          | "reset"  -> run("git", git @ ["reset"; "--hard"; dest])
           | "fetch"  -> ()
           | badsyncmode ->
             failwith (Printf.sprintf "Bad syncmode: %s" badsyncmode)
