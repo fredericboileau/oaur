@@ -1,6 +1,4 @@
-
 open Lwt.Syntax
-
 
 let aur_location = "https://aur.archlinux.org"
 let aur_rpc_ver = 5
@@ -10,21 +8,39 @@ let ua_header = Cohttp.Header.init_with "User-Agent" "oaur"
 
 exception SubExn of string
 
-let run (command, args) =
+let run ?(suppress_output=true) (command, args) =
   let args_array = Array.of_list(List.filter (fun str -> str <> "" ) args) in
-  let (_,status) = Unix.waitpid [] (Unix.create_process
-          command args_array Unix.stdin Unix.stderr Unix.stderr) in
+  if suppress_output then
+    let dev_null = Unix.openfile "/dev/null" [Unix.O_WRONLY] 0o666 in
+    let pid = Unix.create_process command args_array Unix.stdin dev_null dev_null in
+    let (_,status) = Unix.waitpid [] pid in
+    Unix.close dev_null;
+    match status with
+    | Unix.WEXITED 0 -> ()
+    | Unix.WEXITED code -> raise (SubExn (Printf.sprintf "Subprocess exited with code %d" code))
+    | _ -> raise (SubExn "Subprocess error")
+  else
+  let (_,status) =
+    Unix.waitpid []
+      (Unix.create_process command args_array Unix.stdin Unix.stderr Unix.stderr) in
   match status with
   | Unix.WEXITED 0 -> ()
   | Unix.WEXITED code -> raise (SubExn (Printf.sprintf "Subprocess exited with code %d" code))
   | _ -> raise (SubExn "Subprocess error")
 
-let run_noexn (command,args) =
+let run_noexn ?(suppress_output=true) (command,args) =
   let args_array = Array.of_list(List.filter (fun str -> str <> "" ) args) in
-  let (_, status) =
-    Unix.waitpid []
-      (Unix.create_process command args_array Unix.stdin Unix.stderr Unix.stderr) in
-  status
+  if suppress_output then
+    let dev_null = Unix.openfile "/dev/null" [Unix.O_WRONLY] 0o666 in
+    let pid = Unix.create_process command args_array Unix.stdin dev_null dev_null in
+    let (_,status) = Unix.waitpid [] pid in
+    Unix.close dev_null;
+    status
+  else
+    let (_, status) =
+      Unix.waitpid []
+        (Unix.create_process command args_array Unix.stdin Unix.stderr Unix.stderr) in
+    status
 
 
 let run_read_all (cmd,args) =
@@ -169,12 +185,13 @@ let depends pkgname =
 
 let fetch_exn syncmode discard pkgname  = 
   let pkglocation = aur_location ^ "/" ^ pkgname in
-  let command = ("git", ["git";"ls-remote"; "--exit-code"; pkglocation]) in
+  let command = ("git", ["git";"ls-remote"; "--exit-code"; "-q"; pkglocation]) in
   let status = run_noexn command in
-  match status with
-  | Unix.WEXITED 0 -> ()
-  | Unix.WEXITED _ -> raise (SubExn (Printf.sprintf "Pkg %s is not in AUR\n" pkgname))
-  | _ -> raise (SubExn "Subprocess error");
+  ignore
+    (match status with
+     | Unix.WEXITED 0 -> ()
+     | Unix.WEXITED _ -> raise (SubExn (Printf.sprintf "Pkg %s is not in AUR\n" pkgname))
+     | _ -> raise (SubExn "Subprocess error"));
 
   let pathtocheck = Filename.concat pkgname ".git" in
   let pathclean = not (Sys.file_exists pathtocheck && Sys.is_directory pathtocheck) in
@@ -198,7 +215,7 @@ let fetch_exn syncmode discard pkgname  =
 
     in (* sync code goes here*)
 
-    Printf.printf "git directory for %s exists already, acquiring lock" pkgname;
+    Printf.printf "git directory for %s exists already, acquiring lock\n" pkgname;
     (*TODO write new wrapper of flock*)
     (* let fd = Unix.openfile pathtocheck [Unix.O_RDONLY] 0o640 in *)
     (* Flock.flock fd LOCK_EX; *)
@@ -206,34 +223,34 @@ let fetch_exn syncmode discard pkgname  =
     run("git", git @ ["fetch"; "origin"]);
 
     let orig_head = String.trim(
-                         run_read_all("git", git @ ["rev-parse"; "--verify"; "HEAD"])) in
+        run_read_all("git", git @ ["rev-parse"; "--verify"; "HEAD"])) in
     Printf.printf "%s\n" orig_head;
 
     let should_merge = sync_should_merge "origin/HEAD" "HEAD" in
     let upstream = "origin/HEAD" in
-      if should_merge then
-        let syncmode = Option.value ~default:("merge") syncmode in
-        let dest = match syncmode with
-          | "merge" | "rebase" -> "HEAD"
-          | "reset" | "fetch" -> upstream
-          | badsyncmode -> failwith (Printf.sprintf "Bad syncmode: %s" badsyncmode)
-        in
-        try
-          match syncmode with
-          | "merge"  ->
-              if discard then
-               run("git", git @ ["checkout"; "./"]);
-            run("git", git @ ["merge"; upstream]);
-          | "rebase" ->
-              if discard then
-               run("git", git @ ["checkout"; "./"]);
-            run("git", git @ ["rebase"; upstream]);
-          | "reset"  -> run("git", git @ ["reset"; "--hard"; dest])
-          | "fetch"  -> ()
-          | badsyncmode ->
-            failwith (Printf.sprintf "Bad syncmode: %s" badsyncmode)
-        with SubExn _ ->
-          raise (SubExn (Printf.sprintf "fetch: failed to %s %s" syncmode pkgname))
+    if should_merge then
+      let syncmode = Option.value ~default:("merge") syncmode in
+      let dest = match syncmode with
+        | "merge" | "rebase" -> "HEAD"
+        | "reset" | "fetch" -> upstream
+        | badsyncmode -> failwith (Printf.sprintf "Bad syncmode: %s" badsyncmode)
+      in
+      try
+        match syncmode with
+        | "merge"  ->
+          if discard then
+            run("git", git @ ["checkout"; "./"]);
+          run("git", git @ ["merge"; upstream]);
+        | "rebase" ->
+          if discard then
+            run("git", git @ ["checkout"; "./"]);
+          run("git", git @ ["rebase"; upstream]);
+        | "reset"  -> run("git", git @ ["reset"; "--hard"; dest])
+        | "fetch"  -> ()
+        | badsyncmode ->
+          failwith (Printf.sprintf "Bad syncmode: %s" badsyncmode)
+      with SubExn _ ->
+        raise (SubExn (Printf.sprintf "fetch: failed to %s %s" syncmode pkgname))
 
     (* Flock.flock fd LOCK_UN; *)
 
