@@ -275,9 +275,12 @@ let chroot
       makechrootpkg_makepkg_args
   =
   (*TODO eventually change interface to --action, mutually exclusive in definition*)
-  let more_than_one_true a b c =
-    (a && b) || (a && c) || (b && c) in
-  if more_than_one_true build update create then
+  let not_only_one a b c d =
+    let count = List.fold_left (fun acc x -> if x then acc + 1 else acc) 0 [a; b; c; d] in
+    count <> 1
+  in
+
+  if not_only_one build update create path then
     raise (UsageError  "More than one of update create and build was selected");
   
   let (//) = Filename.concat in
@@ -378,7 +381,7 @@ let chroot
            ])
 
     else
-      (* if build *)
+    if build then
       let bind_ro = String.concat " "
           (List.map (fun b_ro -> "-D" ^ b_ro) bind_ro) in
       let bind_rw = String.concat " "
@@ -392,3 +395,9 @@ let chroot
             "--";
             String.concat " " makechrootpkg_makepkg_args;
            ])
+    else
+      (* if path *)
+      let realpath = String.trim(run_read_all("realpath",
+                                              ["realpath"; "--" ; directory // "root"])) in
+
+      print_endline realpath;
