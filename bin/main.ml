@@ -104,6 +104,7 @@ let chroot =
 
            fun () -> Aur.chroot
                          build update create path
+                         directory
                          bind_ro bind_rw
                          pkgnames
                          makechrootpkg_args

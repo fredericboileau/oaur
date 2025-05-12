@@ -5,8 +5,11 @@ let aur_rpc_ver = 5
 let ua_header = Cohttp.Header.init_with "User-Agent" "oaur"
 
 (* TODO: check how alad installs pacman deps *)
+(* TODO: supress backtraces when printing error messages *)
 
 exception SubExn of string
+exception UsageError of string
+
 
 let run ?(suppress_output=true) (command, args) =
   let args_array = Array.of_list(List.filter (fun str -> str <> "" ) args) in
@@ -266,9 +269,9 @@ let fetch pkgnames syncmode discard =
 
 
 
-exception UsageError of string
 let chroot
       build update create path
+      directory
       bind_ro bind_rw
       pkgnames
       makechrootpkg_args
@@ -298,7 +301,7 @@ let chroot
 
   let etcdir = "/etc/aurutils" in
   let shrdir = "/usr/share/devtools" in
-  let directory = "/var/lib/aurbuild" // machine in
+  let directory = Option.value ~default:("/var/lib/aurbuild" // machine) directory in
   let default_pacman_paths = [
     etcdir // "pacman-" ^ machine ^ ".conf";
     shrdir // "pacman.conf.d" // "aurutils" ^ machine ^ ".conf"
@@ -330,14 +333,15 @@ let chroot
       run ("sudo", ["sudo"; "install"; "-d"; directory; "-m"; "755"; "-v" ]);
 
     if not (directory_exists (directory // "root")) then
-      run ("sudo",
-           ["sudo";
-            "mkarchroot";
-            "-C"; pacman_conf;
-            "-M"; makepkg_conf;
-            directory // "root";
-            (String.concat " " base_packages)
-           ]);
+      run ~suppress_output:false
+        ("sudo",
+         ["sudo";
+          "mkarchroot";
+          "-C"; pacman_conf;
+          "-M"; makepkg_conf;
+          directory // "root";
+          (String.concat " " base_packages)
+         ]);
 
   else
     if not (directory_exists (directory // "root")) then
