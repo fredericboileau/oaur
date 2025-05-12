@@ -147,7 +147,6 @@ let check_if_aur pkgname =
 
 
 let classify_deps results =
-  let open Lwt in
   let rec classify_deps_aux pkgnames repo aur other =
     match pkgnames with
     | pkgname::tl ->
@@ -215,16 +214,15 @@ let fetch_exn syncmode discard pkgname  =
 
     in (* sync code goes here*)
 
-    Printf.printf "git directory for %s exists already, acquiring lock\n" pkgname;
     (*TODO write new wrapper of flock*)
+
     (* let fd = Unix.openfile pathtocheck [Unix.O_RDONLY] 0o640 in *)
     (* Flock.flock fd LOCK_EX; *)
 
     run("git", git @ ["fetch"; "origin"]);
 
-    let orig_head = String.trim(
-        run_read_all("git", git @ ["rev-parse"; "--verify"; "HEAD"])) in
-    Printf.printf "%s\n" orig_head;
+    (* let orig_head = String.trim( *)
+    (*     run_read_all("git", git @ ["rev-parse"; "--verify"; "HEAD"])) in *)
 
     let should_merge = sync_should_merge "origin/HEAD" "HEAD" in
     let upstream = "origin/HEAD" in
@@ -313,86 +311,78 @@ let chroot
 
   (* let aur_pacman_auth = [|"sudo"; "--preserve-env=GNUGPGHOME,SSH_AUTH_SOCK,PKGDEST"|] in *)
   if create then
-    begin
-      let base_packages =
-        if pkgnames <> [] then
-          pkgnames
+    let base_packages =
+      if pkgnames <> [] then
+        pkgnames
+      else
+        let multilib_in_conf = run_read_all
+            ("pacini",
+             ["pacini"; "--section=multilib"; pacman_conf]) in
+        if multilib_in_conf <> "" && machine = "x86_64" then
+          ["base-devel"; "multilib-devel"]
         else
-          let multilib_in_conf = run_read_all
-                                   ("pacini",
-                                    ["pacini"; "--section=multilib"; pacman_conf]) in
-          if multilib_in_conf <> "" && machine = "x86_64" then
-            ["base-devel"; "multilib-devel"]
-          else
-            ["base-devel"]
-      in
-      if not (directory_exists directory)  then
-        run ("sudo", ["sudo"; "install"; "-d"; directory; "-m"; "755"; "-v" ]);
+          ["base-devel"]
+    in
+    if not (directory_exists directory)  then
+      run ("sudo", ["sudo"; "install"; "-d"; directory; "-m"; "755"; "-v" ]);
 
-      if not (directory_exists (directory // "root")) then
-        run ("sudo",
-              ["sudo";
-                "mkarchroot";
-                "-C"; pacman_conf;
-                "-M"; makepkg_conf;
-                directory // "root";
-                (String.concat " " base_packages)
-              ]);
+    if not (directory_exists (directory // "root")) then
+      run ("sudo",
+           ["sudo";
+            "mkarchroot";
+            "-C"; pacman_conf;
+            "-M"; makepkg_conf;
+            directory // "root";
+            (String.concat " " base_packages)
+           ]);
 
-
-      if not (directory_exists (directory // "root")) then
-        raise (Failure (Format.sprintf "chroot: %S is not a directory\n
-                                        chroot: did you run aur choor -create\n"
-                          (directory // "root")));
-
-    end
   else
+    if not (directory_exists (directory // "root")) then
+      raise (Failure (Format.sprintf "chroot: %S is not a directory\n
+                                              chroot: did you run aur chroot --create\n"
+                                      (directory // "root")));
+
     let r = Str.regexp {|Server = file://\(.*\)|} in
-    let inp = Unix.open_process_args_in
-                "pacman-conf" [|"pacman-conf"; "--config"; pacman_conf|] in
+    let inp = Unix.open_process_args_in "pacman-conf" [|"pacman-conf"; "--config"; pacman_conf|] in
     let rec find_dirs_to_bindmount_rw ic lines =
       let line = In_channel.input_line ic in
       match line with
       | Some l -> let result = Str.string_match r l 0 in
-                  if result then
-                    find_dirs_to_bindmount_rw ic ((Str.matched_group 1 l)::lines)
-                  else
-                    find_dirs_to_bindmount_rw ic lines
+        if result then
+          find_dirs_to_bindmount_rw ic ((Str.matched_group 1 l)::lines)
+        else
+          find_dirs_to_bindmount_rw ic lines
       | None -> List.rev lines
     in
-    let bindmounts_from_conf_rw = find_dirs_to_bindmount_rw inp [] in
+    let bindmounts_rw_from_conf= find_dirs_to_bindmount_rw inp [] in
 
     if update then
-      begin
+      let bind_ro = String.concat " "
+          (List.map (fun b -> "--bind-ro=" ^ b ) bind_ro)
+      in
+      let bind_rw = String.concat " "
+          (List.map
+             (fun b_rw -> "--bind=" ^ b_rw)
+             (List.append bind_rw bindmounts_rw_from_conf))
+      in
+      run ("sudo",
+           ["sudo";
+            "arch-nspawn";
+            "-C"; pacman_conf;
+            "-M"; makepkg_conf;
+            directory // "root";
+            bind_rw;
+            bind_ro;
+            "pacman"; "-Syu"; "--noconfirm";
+            (String.concat " " pkgnames)
+           ])
 
-
-        let bind_ro = String.concat " "
-                        (List.map (fun b -> "--bind-ro=" ^ b ) bind_ro)
-        in
-        let bind_rw = String.concat " "
-                        (List.map
-                           (fun b_rw -> "--bind=" ^ b_rw)
-                           (List.append bind_rw bindmounts_from_conf_rw))
-        in
-        run ("sudo",
-             ["sudo";
-              "arch-nspawn";
-              "-C"; pacman_conf;
-              "-M"; makepkg_conf;
-              directory // "root";
-              bind_rw;
-              bind_ro;
-              "pacman"; "-Syu"; "--noconfirm";
-              (String.concat " " pkgnames)
-          ])
-
-      end
     else
       (* if build *)
       let bind_ro = String.concat " "
-                      (List.map (fun b_ro -> "-D" ^ b_ro) bind_ro) in
+          (List.map (fun b_ro -> "-D" ^ b_ro) bind_ro) in
       let bind_rw = String.concat " "
-                      (List.map (fun b_rw -> "-d" ^ b_rw) bindmounts_from_conf_rw) in
+          (List.map (fun b_rw -> "-d" ^ b_rw) bindmounts_rw_from_conf) in
       run ("sudo",
            ["sudo"; "--preserve-env=GNUPGHOME,SSH_AUTH_SOCK,PKGDEST";
             "makechrootpkg";
@@ -401,4 +391,4 @@ let chroot
             String.concat " " makechrootpkg_args;
             "--";
             String.concat " " makechrootpkg_makepkg_args;
-        ])
+           ])
