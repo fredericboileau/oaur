@@ -19,9 +19,9 @@
  (name oaur)
  (synopsis "Archlinux User Repository helper")
  (description "Rewrite of aurutils functionalities in ocaml")
- (depends async ocaml dune core 
+ (depends async ocaml dune core
           core_unix uri cohttp-lwt-unix tls-lwt
-          ocolor yojson)
+          ocolor yojson lwt_ppx ppx_jane)
  (tags
   (topics "to describe" your project)))
 
