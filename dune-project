@@ -21,7 +21,7 @@
  (description "Rewrite of aurutils functionalities in ocaml")
  (depends async ocaml dune core
           core_unix uri cohttp-lwt-unix tls-lwt
-          ocolor yojson lwt_ppx ppx_jane)
+          ocolor yojson lwt_ppx ppx_jane ppx_deriving ppx_deriving_yojson)
  (tags
   (topics "to describe" your project)))
 
