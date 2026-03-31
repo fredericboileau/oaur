@@ -13,9 +13,9 @@ let depends =
       ~summary:"Get dependencies of pkg"
       ~readme:(fun () -> "More detailed information")
       [%map_open.Command
-       let pkgname = anon ("pkgname" %: string) and
+       let pkgnames = anon (sequence ("pkgname" %: string)) and
        table = flag "--table" no_arg ~doc:"print table" in
-           fun () -> Lwt_main.run (Aur.dependsAUR pkgname table)]
+           fun () -> Lwt_main.run (Aur.dependsAUR pkgnames table)]
 
 let fetch = 
   Command.basic 

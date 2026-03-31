@@ -73,12 +73,6 @@ let query_aur_info pkgnames =
   Cohttp_lwt.Body.to_string body
 
 
-(* let dep_type_to_string = function *)
-(*   | Depends      -> "Depends" *)
-(*   | MakeDepends  -> "MakeDepends" *)
-(*   | CheckDepends -> "CheckDepends" *)
-(*   | OptDepends   -> "OptDepends" *)
-
 let strip_version dep =
   let re = Str.regexp {|[<>=]|} in
   match Str.search_forward re dep 0 with
@@ -98,138 +92,76 @@ type aur_pkg = {
   provides: string list; [@key "Provided"] [@default []]
 } [@@deriving yojson {strict = false }, show]
 
-let dependsAUR pkgname table =
+let all_dep_types = [Depends; MakeDepends; CheckDepends; OptDepends]
+
+let expand_deps_from_type pkg deptype = match deptype with
+  | Depends      -> pkg.depends
+  | MakeDepends  -> pkg.make_depends
+  | CheckDepends -> pkg.check_depends
+  | OptDepends   -> pkg.opt_depends
+
+
+let dependsAUR pkgnames table =
+
+  let results : (string, aur_pkg) Hashtbl.t = Hashtbl.create 16 in
+  let pkgdeps : (string, string*dep_type) Hashtbl.t = Hashtbl.create 16 in
+  let pkgmap : (string, string*string) Hashtbl.t = Hashtbl.create 16 in
+  let tally : (string, bool) Hashtbl.t = Hashtbl.create 16 in
+
   let fetchinfo pkgnames =
     let* body = query_aur_info pkgnames in
     let open Yojson.Safe.Util in
     let result =  Yojson.Safe.from_string body |> member "results" |> to_list in
     Lwt.return(result)
   in
-  (* let results : (string, aur_pkg) Hashtbl.t = Hashtbl.create 16 in *)
-  let pkgdeps : (string, string*dep_type) Hashtbl.t = Hashtbl.create 16 in
-  let tally : (string, bool) Hashtbl.t = Hashtbl.create 16 in
-  let all_dep_types = [Depends; MakeDepends; CheckDepends; OptDepends] in
 
   let rec resolve depth batch =
     if depth >= aur_callback_max || batch = [] then
-      Lwt.return ()
+      Lwt.return (results, pkgdeps)
     else
       let* json_list = fetchinfo batch in
       let level = List.filter_map (fun j ->
         match aur_pkg_of_yojson j with Ok p -> Some p | Error _ -> None
       ) json_list in
-      let next = List.concat_map (fun pkg ->
-        Hashtbl.replace tally pkg.name true;
-        List.concat_map (fun deptype ->
-          let deps = match deptype with
-            | Depends      -> pkg.depends
-            | MakeDepends  -> pkg.make_depends
-            | CheckDepends -> pkg.check_depends
-            | OptDepends   -> pkg.opt_depends
-          in
-          List.filter_map (fun dep ->
-            let bare = strip_version dep in
-            Hashtbl.add pkgdeps pkg.name (dep, deptype);
-            if Hashtbl.mem tally bare then None
-            else begin
-              Hashtbl.replace tally bare true;
-              Some bare
-            end
-          ) deps
+
+      let all_deps pkg = List.concat_map (fun deptype ->
+        List.map (fun dep -> (dep, deptype)) (expand_deps_from_type pkg deptype)
         ) all_dep_types
-      ) level in
-      resolve (depth + 1) next
+      in
+
+      (*collecting next and filling results tally and pkgdeps and pkgmap at same time *)
+      let next = List.concat_map (fun pkg ->
+
+        List.iter (fun prov_spec ->
+           match String.split_on_char '=' prov_spec with
+          | [prov; prov_version] -> Hashtbl.add pkgmap prov (pkg.name, prov_version)
+          | [prov] -> Hashtl.add pkgmap prov (pkg.name, None)
+          | _ -> ()
+        ) pkg.provides;
+
+        Hashtbl.replace results pkg.name pkg;
+        Hashtbl.replace tally pkg.name true;
+
+        List.filter_map (fun (dep, deptype) ->
+          Hashtbl.add pkgdeps pkg.name (dep, deptype);
+          let bare_dep = strip_version dep in
+          if Hashtbl.mem tally bare_dep then 
+            None
+          else begin
+            Hashtbl.replace tally bare_dep true;
+            Some bare_dep
+          end
+        ) (all_deps pkg)
+
+      ) level
+    in
+    resolve (depth + 1) next
   in
-  resolve 1 [pkgname]
+  resolve 1 pkgnames
 
   (* let pkgmap : (string , string*string) in *)
  
-  (*iterate over depends makedepends checkdepends *)
-  (*fold over *)
 
-  (* let* info =  fetchinfo pkgname in  *)
-  (* Lwt.return(print_result info) *)
-
-
-let depends pkgname table =
-  let query_aur_info pkgnames =
-    let aururl = Uri.of_string aur_location in
-    let path = "/rpc/v" ^ (string_of_int aur_rpc_ver) ^ "/info" in
-    let url = Uri.with_path aururl path in
-    let headers = Cohttp.Header.add ua_header "Content-Type" "application/x-www-form-urlencoded" in
-    let body_str = String.concat "&" (List.map (fun p -> "arg[]=" ^ Uri.pct_encode p) pkgnames) in
-    let body = Cohttp_lwt.Body.of_string body_str in
-    let open Cohttp_lwt_unix in
-    let* (_,body) = Client.post ~headers ~body url in
-    Cohttp_lwt.Body.to_string body
-  in
-
-  (* name -> (pkgbase, (dep_name * dep_type) list) *)
-  let pkg_tbl : (string, string * (string * dep_type) list) Hashtbl.t = Hashtbl.create 16 in
-  let tally : (string, bool) Hashtbl.t = Hashtbl.create 16 in
-
-  (* fill pkg_tbl with dependencies parsed from query_aur_info json result*)
-  let parse_level json_str =
-    let open Yojson.Basic.Util in
-    let results = Yojson.Basic.from_string json_str |> member "results" |> to_list in
-    List.iter (fun pkg ->
-      let name = member "Name" pkg |> to_string in
-      let pkgbase = match member "PackageBase" pkg with
-        | `Null -> name
-        | v -> to_string v
-      in
-      let get_deps key dtype =
-        match member key pkg with
-        | `Null -> []
-        | v -> v |> to_list |> List.map to_string
-               |> List.map (fun d -> (strip_version d, dtype))
-      in
-      let deps =
-        get_deps "Depends"      Depends
-        @ get_deps "MakeDepends"  MakeDepends
-        @ get_deps "CheckDepends" CheckDepends
-      in
-      Hashtbl.replace pkg_tbl name (pkgbase, deps)
-    ) results
-  in
-
-  (* iterative BFS with depth cap *)
-  let rec resolve level batch =
-    if level >= aur_callback_max || batch = [] then
-      Lwt.return ()
-    else begin
-      let* body = query_aur_info batch in
-      parse_level body;
-      let next =
-        (* collect the deps to query next *)
-        Hashtbl.fold (fun _ (_, depsNameAndType) acc ->
-          List.rev_append (List.map fst depsNameAndType) acc) pkg_tbl []
-        |> List.sort_uniq String.compare
-        (*filter out ones tallied so far*)
-        |> List.filter (fun d -> not (Hashtbl.mem tally d))
-      in
-      List.iter (fun d -> Hashtbl.replace tally d true) next;
-      resolve (level + 1) next
-    end
-  in
-
-  (*prevent infinite loop if pkgname depends on itself*)
-  Hashtbl.replace tally pkgname true;
-
-  let* () = resolve 1 [pkgname] in
-  (* self-edge only for the queried target *)
-  (match Hashtbl.find_opt pkg_tbl pkgname with
-   | Some (pkgbase, _) -> Printf.printf "%s\t%s\n" pkgbase pkgbase
-   | None -> ());
-  Hashtbl.iter (fun _name (pkgbase, deps) ->
-    List.iter (fun (dep, dtype) ->
-      match Hashtbl.find_opt pkg_tbl dep with
-      | Some (dep_pkgbase, _) ->
-          Printf.printf "%s\t%s\t%s\n" pkgbase dep_pkgbase (show_dep_type dtype)
-      | None -> ()
-    ) deps
-  ) pkg_tbl;
-  Lwt.return ()
 
 
 let fetch_exn syncmode discard pkgname  = 
