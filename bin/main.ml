@@ -15,7 +15,7 @@ let depends =
       [%map_open.Command
        let pkgnames = anon (sequence ("pkgname" %: string)) and
        table = flag "--table" no_arg ~doc:"print table" in
-           fun () -> Lwt_main.run (Aur.dependsAUR pkgnames table)]
+           fun () -> Lwt_main.run (Depends.dependsAUR pkgnames table)]
 
 let fetch = 
   Command.basic 
