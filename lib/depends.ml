@@ -168,6 +168,11 @@ let graph results pkgdeps pkgmap verify provides =
               in
               if (not verify) || vercmp prov_ver dep_req dep_op then
                 Hashtbl.add dag (prov_name, name) dep_type
+              else begin
+                Printf.eprintf "invalid node: %s=%s (required: %s%s by %s)"
+                  prov_name prov_ver dep_op dep_req name;
+                exit 1
+              end
           | None -> Hashtbl.add dag_foreign (dep_name, name) dep_type)
         deps)
     pkgdeps
