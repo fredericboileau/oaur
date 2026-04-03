@@ -5,7 +5,37 @@ open Utils
 let aur_location = "https://aur.archlinux.org"
 let aur_rpc_ver = 5
 let ua_header = Cohttp.Header.init_with "User-Agent" "oaur"
-let aur_callback_max = 30
+let aur_callback_max = 30 [@@deriving show]
+
+type dep_type = Depends | MakeDepends | CheckDepends | OptDepends | Self
+
+let all_dep_types = [ Depends; MakeDepends; CheckDepends; OptDepends ]
+
+type aur_pkg = {
+  name : string; [@key "Name"]
+  package_base : string; [@key "PackageBase"]
+  version : string; [@key "Version"]
+  depends : string list; [@key "Depends"] [@default []]
+  make_depends : string list; [@key "MakeDepends"] [@default []]
+  check_depends : string list; [@key "CheckDepends"] [@default []]
+  opt_depends : string list; [@key "OptDepends"] [@default []]
+  provides : string list; [@key "Provided"] [@default []]
+}
+[@@deriving yojson { strict = false }, show]
+
+let expand_deps_from_type pkg deptype =
+  match deptype with
+  | Depends -> pkg.depends
+  | MakeDepends -> pkg.make_depends
+  | CheckDepends -> pkg.check_depends
+  | OptDepends -> pkg.opt_depends
+  | Self -> []
+
+let strip_version dep =
+  let re = Str.regexp {|[<>=]|} in
+  match Str.search_forward re dep 0 with
+  | i -> String.sub dep 0 i
+  | exception Not_found -> dep
 
 let query_aur_info pkgnames =
   let aururl = Uri.of_string aur_location in
@@ -23,38 +53,7 @@ let query_aur_info pkgnames =
   let* _, body = Client.post ~headers ~body url in
   Cohttp_lwt.Body.to_string body
 
-let strip_version dep =
-  let re = Str.regexp {|[<>=]|} in
-  match Str.search_forward re dep 0 with
-  | i -> String.sub dep 0 i
-  | exception Not_found -> dep
-
-type dep_type = Depends | MakeDepends | CheckDepends | OptDepends | Self
-[@@deriving show]
-
-type aur_pkg = {
-  name : string; [@key "Name"]
-  package_base : string; [@key "PackageBase"]
-  version : string; [@key "Version"]
-  depends : string list; [@key "Depends"] [@default []]
-  make_depends : string list; [@key "MakeDepends"] [@default []]
-  check_depends : string list; [@key "CheckDepends"] [@default []]
-  opt_depends : string list; [@key "OptDepends"] [@default []]
-  provides : string list; [@key "Provided"] [@default []]
-}
-[@@deriving yojson { strict = false }, show]
-
-let all_dep_types = [ Depends; MakeDepends; CheckDepends; OptDepends ]
-
-let expand_deps_from_type pkg deptype =
-  match deptype with
-  | Depends -> pkg.depends
-  | MakeDepends -> pkg.make_depends
-  | CheckDepends -> pkg.check_depends
-  | OptDepends -> pkg.opt_depends
-  | Self -> []
-
-let dependsAUR pkgnames _table =
+let recurse pkgnames _table =
   let results : (string, aur_pkg) Hashtbl.t = Hashtbl.create 16 in
   (*pkg -> depspec (includes version) and dep_type*)
   let pkgdeps : (string, string * dep_type) Hashtbl.t = Hashtbl.create 16 in
@@ -125,17 +124,20 @@ let dependsAUR pkgnames _table =
 
   (* Populate depends map with command-line targets (#1136) *)
   List.iter (fun name -> Hashtbl.add pkgdeps name (name, Self)) pkgnames;
-
+  (*trigger the run*)
   let* () = resolve 1 pkgnames in
 
-  List.iter
-    (fun name ->
-      if not (Hashtbl.mem results name) then
-        Printf.eprintf "target not found %s\n" name)
-    pkgnames;
-
-  if Hashtbl.length results = 0 then Printf.eprintf "no packages found\n";
-  exit 1;
+  (*check results*)
+  if Hashtbl.length results = 0 then begin
+    Printf.eprintf "no packages found\n";
+    exit 1
+  end
+  else
+    List.iter
+      (fun name ->
+        if not (Hashtbl.mem results name) then
+          Printf.eprintf "target not found %s\n" name)
+      pkgnames;
 
   Lwt.return ()
 
@@ -147,11 +149,27 @@ let graph results pkgdeps pkgmap verify provides =
     let re = Str.regexp {|<=\|>=\|<\|=\|>|} in
     match Str.full_split re dep_spec with
     | [ Text name; Delim op; Text req ] -> (name, Some op, Some req)
+    | [ Text name ] -> (name, None, None)
     | _ -> failwith (Printf.sprintf "parse_dep: unepected format %s" dep_spec)
   in
 
-  (*stub*)
-  let vercmp prov_ver dep_req dep_op = true in
+  let vercmp ver1 ver2 op =
+    let vercmp_run ver1 ver2 =
+      int_of_string
+        (String.trim (run_read_all ("vercmp", [ "vercmp"; ver1; ver2 ])))
+    in
+    match (ver2, op) with
+    | None, _ | _, None -> true
+    | Some v2, Some "=" -> ver1 = v2
+    | Some v2, Some op -> (
+        let cmp = vercmp_run ver1 v2 in
+        match op with
+        | "<" -> cmp < 0
+        | ">" -> cmp > 0
+        | "<=" -> cmp <= 0
+        | ">=" -> cmp >= 0
+        | _ -> failwith ("invalid vercmp operation: " ^ op))
+  in
 
   Hashtbl.iter
     (fun name deps ->
@@ -167,12 +185,19 @@ let graph results pkgdeps pkgmap verify provides =
                 else (dep_name, dep_ver)
               in
               if (not verify) || vercmp prov_ver dep_req dep_op then
-                Hashtbl.add dag (prov_name, name) dep_type
+                Hashtbl.replace dag (prov_name, name) dep_type
               else begin
                 Printf.eprintf "invalid node: %s=%s (required: %s%s by %s)"
-                  prov_name prov_ver dep_op dep_req name;
+                  prov_name prov_ver
+                  (Option.value ~default:"None" dep_op)
+                  (Option.value ~default:"None" dep_req)
+                  name;
                 exit 1
               end
-          | None -> Hashtbl.add dag_foreign (dep_name, name) dep_type)
+          | None -> Hashtbl.replace dag_foreign (dep_name, name) dep_type)
         deps)
-    pkgdeps
+    pkgdeps;
+
+  (dag, dag_foreign)
+
+let tsort bfs input = ()
