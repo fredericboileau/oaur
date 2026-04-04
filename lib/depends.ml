@@ -20,6 +20,7 @@ type aur_pkg = {
   check_depends : string list; [@key "CheckDepends"] [@default []]
   opt_depends : string list; [@key "OptDepends"] [@default []]
   provides : string list; [@key "Provided"] [@default []]
+  required_by : (string * dep_type) list; [@default []]
 }
 [@@deriving yojson { strict = false }, show]
 
@@ -53,11 +54,16 @@ let query_aur_info pkgnames =
   let* _, body = Client.post ~headers ~body url in
   Cohttp_lwt.Body.to_string body
 
-let recurse pkgnames _table =
+let recurse pkgnames types =
+  (*information for all aur pkgs queried with rpc*)
   let results : (string, aur_pkg) Hashtbl.t = Hashtbl.create 16 in
   (*pkg -> depspec (includes version) and dep_type*)
-  let pkgdeps : (string, string * dep_type) Hashtbl.t = Hashtbl.create 16 in
+  let pkgdeps : (string, (string * dep_type) list) Hashtbl.t =
+    Hashtbl.create 16
+  in
+  (* key is virtpkg provided and value is (pkg provider, pkg provider version)*)
   let pkgmap : (string, string * string) Hashtbl.t = Hashtbl.create 16 in
+  (*so we dont query deps for the same package twice*)
   let tally : (string, bool) Hashtbl.t = Hashtbl.create 16 in
 
   let fetchinfo pkgnames =
@@ -88,7 +94,7 @@ let recurse pkgnames _table =
             List.map
               (fun dep -> (dep, deptype))
               (expand_deps_from_type pkg deptype))
-          all_dep_types
+          types
       in
 
       let next =
@@ -108,7 +114,10 @@ let recurse pkgnames _table =
 
             List.filter_map
               (fun (dep, deptype) ->
-                Hashtbl.add pkgdeps pkg.name (dep, deptype);
+                Hashtbl.replace pkgdeps pkg.name
+                  ((dep, deptype)
+                  :: Option.value ~default:[]
+                       (Hashtbl.find_opt pkgdeps pkg.name));
                 let bare_dep = strip_version dep in
                 if Hashtbl.mem tally bare_dep then None
                 else begin
@@ -123,7 +132,7 @@ let recurse pkgnames _table =
   in
 
   (* Populate depends map with command-line targets (#1136) *)
-  List.iter (fun name -> Hashtbl.add pkgdeps name (name, Self)) pkgnames;
+  List.iter (fun name -> Hashtbl.add pkgdeps name [ (name, Self) ]) pkgnames;
   (*trigger the run*)
   let* () = resolve 1 pkgnames in
 
@@ -139,9 +148,9 @@ let recurse pkgnames _table =
           Printf.eprintf "target not found %s\n" name)
       pkgnames;
 
-  Lwt.return ()
+  Lwt.return (results, pkgdeps, pkgmap)
 
-let graph results pkgdeps pkgmap verify provides =
+let graph ~provides ~verify results pkgdeps pkgmap =
   let dag : (string * string, dep_type) Hashtbl.t = Hashtbl.create 16 in
   let dag_foreign : (string * string, dep_type) Hashtbl.t = Hashtbl.create 16 in
 
@@ -153,6 +162,7 @@ let graph results pkgdeps pkgmap verify provides =
     | _ -> failwith (Printf.sprintf "parse_dep: unepected format %s" dep_spec)
   in
 
+  (* use vercmp from archlinux distribution with vercmp_run *)
   let vercmp ver1 ver2 op =
     let vercmp_run ver1 ver2 =
       int_of_string
@@ -171,6 +181,8 @@ let graph results pkgdeps pkgmap verify provides =
         | _ -> failwith ("invalid vercmp operation: " ^ op))
   in
 
+  (* build dag from pkgdeps hashtbl using pkgmap for virtual packages *)
+  (* build dag-foreign if doesn't find package in results *)
   Hashtbl.iter
     (fun name deps ->
       List.iter
@@ -200,4 +212,75 @@ let graph results pkgdeps pkgmap verify provides =
 
   (dag, dag_foreign)
 
-let tsort bfs input = ()
+(*remove installed packages from dag*)
+(*first remove installed and then recurse on orphans*)
+
+(*TODO FP instead of mutating dag in place*)
+let prune dag installed =
+  let module StringSet = Set.Make (String) in
+  let set_of_provs dag =
+    Hashtbl.fold
+      (fun (prov, _) _ set -> StringSet.add prov set)
+      dag StringSet.empty
+  in
+  let installed_set =
+    List.fold_left
+      (fun set inst -> StringSet.add inst set)
+      StringSet.empty installed
+  in
+  let rec go toremove =
+    if StringSet.is_empty toremove then []
+    else begin
+      let prev_provs = set_of_provs dag in
+      Hashtbl.filter_map_inplace
+        (fun (prov, dep) dep_type ->
+          if StringSet.mem prov toremove || StringSet.mem dep toremove then None
+          else Some dep_type)
+        dag;
+      let curr_provs = set_of_provs dag in
+      let removals = StringSet.diff prev_provs curr_provs in
+
+      StringSet.elements removals @ go removals
+    end
+  in
+  go installed_set
+
+let solve ~installed ~verify ~provides types targets =
+  let* results, pkgdeps, pkgmap = recurse targets types in
+  let dag, dag_foreign = graph ~provides ~verify results pkgdeps pkgmap in
+  let to_prune =
+    installed
+    @ if provides then Hashtbl.fold (fun k _ acc -> k :: acc) pkgmap [] else []
+  in
+  let removed = prune dag to_prune in
+  List.iter (fun name -> Hashtbl.remove results name) removed;
+
+  Lwt.return (results, dag, dag_foreign)
+
+let main ?(include_depends = true) ?(include_makedepends = true)
+    ?(include_checkdepends = true) ?(include_optdepends = false)
+    ?(installed = []) ?(verify = true) ?(provides = true) targets =
+  let types =
+    List.filter_map
+      (fun (flag, dep_type) -> if flag then Some dep_type else None)
+      [
+        (include_depends, Depends);
+        (include_makedepends, MakeDepends);
+        (include_checkdepends, CheckDepends);
+        (include_optdepends, OptDepends);
+      ]
+  in
+  let* results, dag, dag_foreign =
+    solve ~installed ~verify ~provides types targets
+  in
+
+  Hashtbl.iter
+    (fun (prov, required) dep_type ->
+      match Hashtbl.find_opt results prov with
+      | Some pkg ->
+          Hashtbl.replace results prov
+            { pkg with required_by = (required, dep_type) :: pkg.required_by }
+      | None -> ())
+    dag;
+
+  Lwt.return ()
