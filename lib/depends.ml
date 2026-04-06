@@ -150,9 +150,24 @@ let recurse pkgnames types =
 
   Lwt.return (results, pkgdeps, pkgmap)
 
+let dag_insert dag prov name dep_type =
+  let inner =
+    match Hashtbl.find_opt dag prov with
+    | Some t -> t
+    | None ->
+        let t = Hashtbl.create 4 in
+        Hashtbl.replace dag prov t;
+        t
+  in
+  Hashtbl.replace inner name dep_type
+
 let graph ~provides ~verify results pkgdeps pkgmap =
-  let dag : (string * string, dep_type) Hashtbl.t = Hashtbl.create 16 in
-  let dag_foreign : (string * string, dep_type) Hashtbl.t = Hashtbl.create 16 in
+  let dag : (string, (string, dep_type) Hashtbl.t) Hashtbl.t =
+    Hashtbl.create 16
+  in
+  let dag_foreign : (string, (string, dep_type) Hashtbl.t) Hashtbl.t =
+    Hashtbl.create 16
+  in
 
   let parse_dep dep_spec =
     let re = Str.regexp {|<=\|>=\|<\|=\|>|} in
@@ -197,7 +212,7 @@ let graph ~provides ~verify results pkgdeps pkgmap =
                 else (dep_name, dep_ver)
               in
               if (not verify) || vercmp prov_ver dep_req dep_op then
-                Hashtbl.replace dag (prov_name, name) dep_type
+                dag_insert dag prov_name name dep_type
               else begin
                 Printf.eprintf "invalid node: %s=%s (required: %s%s by %s)"
                   prov_name prov_ver
@@ -206,7 +221,7 @@ let graph ~provides ~verify results pkgdeps pkgmap =
                   name;
                 exit 1
               end
-          | None -> Hashtbl.replace dag_foreign (dep_name, name) dep_type)
+          | None -> dag_insert dag_foreign dep_name name dep_type)
         deps)
     pkgdeps;
 
@@ -219,9 +234,7 @@ let graph ~provides ~verify results pkgdeps pkgmap =
 let prune dag installed =
   let module StringSet = Set.Make (String) in
   let set_of_provs dag =
-    Hashtbl.fold
-      (fun (prov, _) _ set -> StringSet.add prov set)
-      dag StringSet.empty
+    Hashtbl.fold (fun prov _ set -> StringSet.add prov set) dag StringSet.empty
   in
   let installed_set =
     List.fold_left
@@ -232,14 +245,22 @@ let prune dag installed =
     if StringSet.is_empty toremove then []
     else begin
       let prev_provs = set_of_provs dag in
+      (* remove dependents that are in toremove from each inner table *)
+      Hashtbl.iter
+        (fun _prov inner ->
+          Hashtbl.filter_map_inplace
+            (fun dep dep_type ->
+              if StringSet.mem dep toremove then None else Some dep_type)
+            inner)
+        dag;
+      (* remove providers that are in toremove or have no dependents left *)
       Hashtbl.filter_map_inplace
-        (fun (prov, dep) dep_type ->
-          if StringSet.mem prov toremove || StringSet.mem dep toremove then None
-          else Some dep_type)
+        (fun prov inner ->
+          if StringSet.mem prov toremove || Hashtbl.length inner = 0 then None
+          else Some inner)
         dag;
       let curr_provs = set_of_provs dag in
       let removals = StringSet.diff prev_provs curr_provs in
-
       StringSet.elements removals @ go removals
     end
   in
@@ -275,11 +296,11 @@ let main ?(include_depends = true) ?(include_makedepends = true)
   in
 
   Hashtbl.iter
-    (fun (prov, required) dep_type ->
+    (fun prov inner ->
       match Hashtbl.find_opt results prov with
       | Some pkg ->
-          Hashtbl.replace results prov
-            { pkg with required_by = (required, dep_type) :: pkg.required_by }
+          let req_by = Hashtbl.fold (fun dep dt acc -> (dep, dt) :: acc) inner [] in
+          Hashtbl.replace results prov { pkg with required_by = req_by }
       | None -> ())
     dag;
 
