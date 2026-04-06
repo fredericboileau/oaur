@@ -1,5 +1,13 @@
 open Core
 
+let mode_of_string mode_as_string = 
+  let open Aur.Depends in
+  match mode_as_string with
+  | "pairs" -> Pairs
+  | "table" -> Table
+  | "json" -> Json
+  | s -> failwith ("unknown mode: " ^ s)
+
 let search = 
     Command.basic 
         ~summary:"Search for aur package" 
@@ -7,15 +15,15 @@ let search =
         [%map_open.Command
             let term = anon ("term" %: string)
             and sort_criteria = anon (maybe ("sort_criteria" %: string)) in
-                fun () -> Lwt_main.run (Aur.search term)] 
+                fun () -> Lwt_main.run (Aur.Commands.search term)] 
 let depends = 
   Command.basic
       ~summary:"Get dependencies of pkg"
       ~readme:(fun () -> "More detailed information")
       [%map_open.Command
        let pkgnames = anon (sequence ("pkgname" %: string)) and
-       table = flag "--table" no_arg ~doc:"print table" in
-           fun () -> Lwt_main.run (Depends.dependsAUR pkgnames table)]
+       output_mode = flag "--mode" (optional_with_default "pairs" string) ~doc:"MODE pairs|table|json" in
+           fun () -> Lwt_main.run (Aur.Depends.main pkgnames ~output_mode:(mode_of_string output_mode))]
 
 let fetch = 
   Command.basic 
@@ -26,7 +34,7 @@ let fetch =
                           ~doc:"syncmode when fetching aur repo" and
            discard = flag "--discard" no_arg
                          ~doc:"discard local changes when syncing" in
-           fun () -> Aur.fetch pkgnames syncmode discard]
+           fun () -> Aur.Commands.fetch pkgnames syncmode discard]
 
 let chroot =
       Command.basic
@@ -103,7 +111,7 @@ let chroot =
                                                 makechrootpkg_makepkg_args_translation
                                                 makechrootpkg_makepgkg_args_init in
 
-           fun () -> Aur.chroot
+           fun () -> Aur.Commands.chroot
                          build update create path
                          directory
                          bind_ro bind_rw

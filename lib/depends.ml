@@ -7,7 +7,10 @@ let aur_rpc_ver = 5
 let ua_header = Cohttp.Header.init_with "User-Agent" "oaur"
 let aur_callback_max = 30 [@@deriving show]
 
+type output_mode = Pairs | Table | Json
+
 type dep_type = Depends | MakeDepends | CheckDepends | OptDepends | Self
+[@@deriving yojson, show]
 
 let all_dep_types = [ Depends; MakeDepends; CheckDepends; OptDepends ]
 
@@ -20,9 +23,10 @@ type aur_pkg = {
   check_depends : string list; [@key "CheckDepends"] [@default []]
   opt_depends : string list; [@key "OptDepends"] [@default []]
   provides : string list; [@key "Provided"] [@default []]
+  (*added after parsing, does not come from json*)
   required_by : (string * dep_type) list; [@default []]
 }
-[@@deriving yojson { strict = false }, show]
+[@@deriving of_yojson { strict = false }, show]
 
 let expand_deps_from_type pkg deptype =
   match deptype with
@@ -278,9 +282,40 @@ let solve ~installed ~verify ~provides types targets =
 
   Lwt.return (results, dag, dag_foreign)
 
+let make_pairs results key reverse =
+  let seen : (string * string, bool) Hashtbl.t = Hashtbl.create 16 in
+  let get_id pkg =
+    match key with `Name -> pkg.name | `PackageBase -> pkg.package_base
+  in
+  let get_rdep dep_name =
+    match key with
+    | `Name -> dep_name
+    | `PackageBase -> (
+        match Hashtbl.find_opt results dep_name with
+        | Some pkg -> pkg.package_base
+        | None -> "-")
+  in
+  Hashtbl.fold
+    (fun _ pkg acc ->
+      let target = get_id pkg in
+      List.fold_left
+        (fun acc (dep_name, _dep_type) ->
+          let rdep = get_rdep dep_name in
+          let pair = if reverse then (target, rdep) else (rdep, target) in
+          if Hashtbl.mem seen pair then acc
+          else begin
+            Hashtbl.replace seen pair true;
+            pair :: acc
+          end)
+        acc pkg.required_by)
+    results []
+
+(*handle "-" to take package from stdin*)
 let main ?(include_depends = true) ?(include_makedepends = true)
     ?(include_checkdepends = true) ?(include_optdepends = false)
-    ?(installed = []) ?(verify = true) ?(provides = true) targets =
+    ?(installed = []) ?(verify = true) ?(provides = true) ?(show_all = false)
+    ?(output_mode = Pairs) ?(opt_pkgname = false) ?(opt_reverse = false) targets
+    =
   let types =
     List.filter_map
       (fun (flag, dep_type) -> if flag then Some dep_type else None)
@@ -295,13 +330,45 @@ let main ?(include_depends = true) ?(include_makedepends = true)
     solve ~installed ~verify ~provides types targets
   in
 
+  (*add requiredby to results*)
   Hashtbl.iter
-    (fun prov inner ->
-      match Hashtbl.find_opt results prov with
-      | Some pkg ->
-          let req_by = Hashtbl.fold (fun dep dt acc -> (dep, dt) :: acc) inner [] in
-          Hashtbl.replace results prov { pkg with required_by = req_by }
-      | None -> ())
+    (fun name inner ->
+      let req_by = Hashtbl.fold (fun dep dt acc -> (dep, dt) :: acc) inner [] in
+      (*find instead of find_opt, we are guaranteed there is an entry in results if in dag*)
+      let pkg = Hashtbl.find results name in
+      Hashtbl.replace results name { pkg with required_by = req_by })
     dag;
 
-  Lwt.return ()
+  if show_all then
+    Hashtbl.iter
+      (fun name inner ->
+        let required_by =
+          Hashtbl.fold (fun dep dt acc -> (dep, dt) :: acc) inner []
+        in
+        let pkg =
+          {
+            name;
+            required_by;
+            package_base = "foreign";
+            version = "foreign";
+            depends = [];
+            make_depends = [];
+            check_depends = [];
+            opt_depends = [];
+            provides = [];
+          }
+        in
+        Hashtbl.add results name pkg)
+      dag_foreign;
+
+  Lwt.return
+    (match output_mode with
+    | Pairs ->
+        let pairs =
+          make_pairs results
+            (if opt_pkgname || show_all then `Name else `PackageBase)
+            opt_reverse
+        in
+        List.iter (fun (x, y) -> print_endline (x ^ "\t" ^ y)) pairs
+    | Table -> ()
+    | Json -> ())
