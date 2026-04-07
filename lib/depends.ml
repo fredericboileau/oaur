@@ -14,19 +14,59 @@ type dep_type = Depends | MakeDepends | CheckDepends | OptDepends | Self
 
 let all_dep_types = [ Depends; MakeDepends; CheckDepends; OptDepends ]
 
+let required_by_to_yojson lst =
+  `Assoc (List.map (fun (name, dt) -> (name, `String (show_dep_type dt))) lst)
+
+let required_by_of_yojson = function
+  | `Assoc pairs ->
+    Result.ok (List.filter_map (fun (name, v) ->
+      match v with
+      | `String s -> (match dep_type_of_yojson (`List [`String s]) with
+                      | Ok dt -> Some (name, dt)
+                      | Error _ -> None)
+      | _ -> None) pairs)
+  | _ -> Error "required_by_of_yojson: expected object"
+
 type aur_pkg = {
   name : string; [@key "Name"]
   package_base : string option; [@key "PackageBase"] [@default None]
-  version : string; [@key "Version"]
+  version : string option; [@key "Version"] [@default None]
   depends : string list; [@key "Depends"] [@default []]
   make_depends : string list; [@key "MakeDepends"] [@default []]
   check_depends : string list; [@key "CheckDepends"] [@default []]
   opt_depends : string list; [@key "OptDepends"] [@default []]
-  provides : string list; [@key "Provided"] [@default []]
+  provides : string list; [@key "Provides"] [@default []]
+  description : string option; [@key "Description"] [@default None]
+  url : string option; [@key "URL"] [@default None]
+  url_path : string option; [@key "URLPath"] [@default None]
+  num_votes : int option; [@key "NumVotes"] [@default None]
+  popularity : float option; [@key "Popularity"] [@default None]
+  out_of_date : int option; [@key "OutOfDate"] [@default None]
+  maintainer : string option; [@key "Maintainer"] [@default None]
+  submitter : string option; [@key "Submitter"] [@default None]
+  first_submitted : int option; [@key "FirstSubmitted"] [@default None]
+  last_modified : int option; [@key "LastModified"] [@default None]
+  id : int option; [@key "ID"] [@default None]
+  package_base_id : int option; [@key "PackageBaseID"] [@default None]
+  keywords : string list; [@key "Keywords"] [@default []]
+  license : string list; [@key "License"] [@default []]
   (*added after parsing, does not come from json*)
   required_by : (string * dep_type) list; [@default []]
+    [@to_yojson required_by_to_yojson] [@of_yojson required_by_of_yojson]
 }
-[@@deriving of_yojson { strict = false }, show]
+[@@deriving yojson { strict = false }, show]
+
+let empty_pkg name = {
+  name; required_by = [];
+  package_base = None; version = None;
+  depends = []; make_depends = []; check_depends = [];
+  opt_depends = []; provides = [];
+  description = None; url = None; url_path = None;
+  num_votes = None; popularity = None; out_of_date = None;
+  maintainer = None; submitter = None; first_submitted = None;
+  last_modified = None; id = None; package_base_id = None;
+  keywords = []; license = [];
+}
 
 let expand_deps_from_type pkg deptype =
   match deptype with
@@ -206,7 +246,11 @@ let graph ~provides ~verify results pkgdeps pkgmap =
           let dep_name, dep_op, dep_req = parse_dep dep_spec in
           match Hashtbl.find_opt results dep_name with
           | Some pkg ->
-              let dep_ver = List.hd (Str.split (Str.regexp "-") pkg.version) in
+              let dep_ver =
+                List.hd
+                  (Str.split (Str.regexp "-")
+                     (Option.value ~default:"" pkg.version))
+              in
               let prov_name, prov_ver =
                 if provides && Hashtbl.mem pkgmap dep_name then
                   Hashtbl.find pkgmap dep_name
@@ -294,18 +338,7 @@ let add_dag_to_results results dag dag_foreign show_all =
         let required_by =
           Hashtbl.fold (fun dep dt acc -> (dep, dt) :: acc) inner []
         in
-        let pkg =
-          {
-            name;
-            required_by;
-            package_base = None;
-            version = "foreign";
-            depends = [];
-            make_depends = [];
-            check_depends = [];
-            opt_depends = [];
-            provides = [];
-          }
+        let pkg = { (empty_pkg name) with required_by }
         in
         Hashtbl.add results name pkg)
       dag_foreign
@@ -348,22 +381,46 @@ type table_row = {
   dep_type : dep_type;
 }
 
-let make_table results types =
+let make_table_v10 results types =
   Hashtbl.fold
     (fun name pkg acc ->
       match pkg.package_base with
       | None -> acc
       | Some base ->
           let pkg_row =
-            { name; dep = name; base; version = pkg.version; dep_type = Self }
+            {
+              name;
+              dep = name;
+              base;
+              version = Option.value ~default:"-" pkg.version;
+              dep_type = Self;
+            }
           in
           let rows =
             List.fold_left
               (fun acc_rows (dep, dep_type) ->
-                { name; dep; base; version = pkg.version; dep_type } :: acc_rows)
+                {
+                  name;
+                  dep;
+                  base;
+                  version = Option.value ~default:"-" pkg.version;
+                  dep_type;
+                }
+                :: acc_rows)
               [] (all_deps pkg types)
           in
           (pkg_row :: rows) @ acc)
+    results []
+
+let make_table_reverse results =
+  Hashtbl.fold
+    (fun name pkg acc ->
+      let base = Option.value ~default:"-" pkg.package_base in
+      let version = Option.value ~default:"-" pkg.version in
+      List.fold_left
+        (fun acc (dep, dep_type) ->
+          { name; dep; base; version; dep_type } :: acc)
+        acc pkg.required_by)
     results []
 
 let print_table rows =
@@ -411,5 +468,15 @@ let main ?(include_depends = true) ?(include_makedepends = true)
             ~reverse:opt_reverse
         in
         List.iter (fun (x, y) -> print_endline (x ^ "\t" ^ y)) pairs
-    | Table -> print_table (make_table results types)
-    | Json -> ())
+    | Table ->
+        print_table
+          (if opt_reverse then make_table_v10 results types
+           else make_table_reverse results)
+    | Json ->
+        let json =
+          `Assoc
+            (Hashtbl.fold
+               (fun name pkg acc -> (name, aur_pkg_to_yojson pkg) :: acc)
+               results [])
+        in
+        print_endline (Yojson.Safe.to_string json))
