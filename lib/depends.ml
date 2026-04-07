@@ -14,8 +14,15 @@ type dep_type = Depends | MakeDepends | CheckDepends | OptDepends | Self
 
 let all_dep_types = [ Depends; MakeDepends; CheckDepends; OptDepends ]
 
+let dep_type_to_string = function
+  | Depends -> "Depends"
+  | MakeDepends -> "MakeDepends"
+  | CheckDepends -> "CheckDepends"
+  | OptDepends -> "OptDepends"
+  | Self -> "Self"
+
 let required_by_to_yojson lst =
-  `Assoc (List.map (fun (name, dt) -> (name, `String (show_dep_type dt))) lst)
+  `Assoc (List.map (fun (name, dt) -> (name, `String (dep_type_to_string dt))) lst)
 
 let required_by_of_yojson = function
   | `Assoc pairs ->
