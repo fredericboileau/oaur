@@ -16,14 +16,16 @@ let search =
             let term = anon ("term" %: string)
             and sort_criteria = anon (maybe ("sort_criteria" %: string)) in
                 fun () -> Lwt_main.run (Aur.Commands.search term)] 
+
 let depends = 
   Command.basic
       ~summary:"Get dependencies of pkg"
       ~readme:(fun () -> "More detailed information")
       [%map_open.Command
        let pkgnames = anon (sequence ("pkgname" %: string)) and
-       output_mode = flag "--mode" (optional_with_default "pairs" string) ~doc:"MODE pairs|table|json" in
-           fun () -> Lwt_main.run (Aur.Depends.main pkgnames ~output_mode:(mode_of_string output_mode))]
+       output_mode = flag "--output-mode" (optional_with_default "pairs" string) ~doc:"MODE pairs|table|json" and
+       opt_reverse = flag "--reverse" no_arg ~doc:"reverse dependency" in
+           fun () -> Lwt_main.run (Aur.Depends.main pkgnames ~output_mode:(mode_of_string output_mode) ~opt_reverse)]
 
 let fetch = 
   Command.basic 

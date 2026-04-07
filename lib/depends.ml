@@ -16,7 +16,7 @@ let all_dep_types = [ Depends; MakeDepends; CheckDepends; OptDepends ]
 
 type aur_pkg = {
   name : string; [@key "Name"]
-  package_base : string; [@key "PackageBase"]
+  package_base : string option; [@key "PackageBase"] [@default None]
   version : string; [@key "Version"]
   depends : string list; [@key "Depends"] [@default []]
   make_depends : string list; [@key "MakeDepends"] [@default []]
@@ -35,6 +35,12 @@ let expand_deps_from_type pkg deptype =
   | CheckDepends -> pkg.check_depends
   | OptDepends -> pkg.opt_depends
   | Self -> []
+
+let all_deps pkg types =
+  List.concat_map
+    (fun deptype ->
+      List.map (fun dep -> (dep, deptype)) (expand_deps_from_type pkg deptype))
+    types
 
 let strip_version dep =
   let re = Str.regexp {|[<>=]|} in
@@ -92,15 +98,6 @@ let recurse pkgnames types =
           json_list
       in
 
-      let all_deps pkg =
-        List.concat_map
-          (fun deptype ->
-            List.map
-              (fun dep -> (dep, deptype))
-              (expand_deps_from_type pkg deptype))
-          types
-      in
-
       let next =
         List.concat_map
           (fun pkg ->
@@ -128,7 +125,7 @@ let recurse pkgnames types =
                   Hashtbl.replace tally bare_dep true;
                   Some bare_dep
                 end)
-              (all_deps pkg))
+              (all_deps pkg types))
           level
       in
 
@@ -282,17 +279,50 @@ let solve ~installed ~verify ~provides types targets =
 
   Lwt.return (results, dag, dag_foreign)
 
-let make_pairs results key reverse =
+let add_dag_to_results results dag dag_foreign show_all =
+  Hashtbl.iter
+    (fun name inner ->
+      let req_by = Hashtbl.fold (fun dep dt acc -> (dep, dt) :: acc) inner [] in
+      (*find instead of find_opt, we are guaranteed there is an entry in results if in dag*)
+      let pkg = Hashtbl.find results name in
+      Hashtbl.replace results name { pkg with required_by = req_by })
+    dag;
+
+  if show_all then
+    Hashtbl.iter
+      (fun name inner ->
+        let required_by =
+          Hashtbl.fold (fun dep dt acc -> (dep, dt) :: acc) inner []
+        in
+        let pkg =
+          {
+            name;
+            required_by;
+            package_base = None;
+            version = "foreign";
+            depends = [];
+            make_depends = [];
+            check_depends = [];
+            opt_depends = [];
+            provides = [];
+          }
+        in
+        Hashtbl.add results name pkg)
+      dag_foreign
+
+let make_pairs results ~key ~reverse =
   let seen : (string * string, bool) Hashtbl.t = Hashtbl.create 16 in
   let get_id pkg =
-    match key with `Name -> pkg.name | `PackageBase -> pkg.package_base
+    match key with
+    | `Name -> pkg.name
+    | `PackageBase -> Option.value ~default:"-" pkg.package_base
   in
   let get_rdep dep_name =
     match key with
     | `Name -> dep_name
     | `PackageBase -> (
         match Hashtbl.find_opt results dep_name with
-        | Some pkg -> pkg.package_base
+        | Some pkg -> Option.value ~default:"-" pkg.package_base
         | None -> "-")
   in
   Hashtbl.fold
@@ -309,6 +339,46 @@ let make_pairs results key reverse =
           end)
         acc pkg.required_by)
     results []
+
+type table_row = {
+  name : string;
+  dep : string;
+  base : string;
+  version : string;
+  dep_type : dep_type;
+}
+
+let make_table results types =
+  Hashtbl.fold
+    (fun name pkg acc ->
+      match pkg.package_base with
+      | None -> acc
+      | Some base ->
+          let pkg_row =
+            { name; dep = name; base; version = pkg.version; dep_type = Self }
+          in
+          let rows =
+            List.fold_left
+              (fun acc_rows (dep, dep_type) ->
+                { name; dep; base; version = pkg.version; dep_type } :: acc_rows)
+              [] (all_deps pkg types)
+          in
+          (pkg_row :: rows) @ acc)
+    results []
+
+let print_table rows =
+  List.iter
+    (fun row ->
+      print_endline
+        (String.concat "\t"
+           [
+             row.name;
+             row.dep;
+             row.base;
+             row.version;
+             show_dep_type row.dep_type;
+           ]))
+    rows
 
 (*handle "-" to take package from stdin*)
 let main ?(include_depends = true) ?(include_makedepends = true)
@@ -330,45 +400,16 @@ let main ?(include_depends = true) ?(include_makedepends = true)
     solve ~installed ~verify ~provides types targets
   in
 
-  (*add requiredby to results*)
-  Hashtbl.iter
-    (fun name inner ->
-      let req_by = Hashtbl.fold (fun dep dt acc -> (dep, dt) :: acc) inner [] in
-      (*find instead of find_opt, we are guaranteed there is an entry in results if in dag*)
-      let pkg = Hashtbl.find results name in
-      Hashtbl.replace results name { pkg with required_by = req_by })
-    dag;
-
-  if show_all then
-    Hashtbl.iter
-      (fun name inner ->
-        let required_by =
-          Hashtbl.fold (fun dep dt acc -> (dep, dt) :: acc) inner []
-        in
-        let pkg =
-          {
-            name;
-            required_by;
-            package_base = "foreign";
-            version = "foreign";
-            depends = [];
-            make_depends = [];
-            check_depends = [];
-            opt_depends = [];
-            provides = [];
-          }
-        in
-        Hashtbl.add results name pkg)
-      dag_foreign;
+  add_dag_to_results results dag dag_foreign show_all;
 
   Lwt.return
     (match output_mode with
     | Pairs ->
         let pairs =
           make_pairs results
-            (if opt_pkgname || show_all then `Name else `PackageBase)
-            opt_reverse
+            ~key:(if opt_pkgname || show_all then `Name else `PackageBase)
+            ~reverse:opt_reverse
         in
         List.iter (fun (x, y) -> print_endline (x ^ "\t" ^ y)) pairs
-    | Table -> ()
+    | Table -> print_table (make_table results types)
     | Json -> ())
