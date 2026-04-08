@@ -3,6 +3,7 @@ open Utils
 
 let ( // ) = Filename.concat
 let directory_exists d = Sys.file_exists d && Sys.is_directory d
+let is_regular_file p = try Sys.is_regular_file p with Sys_error _ -> false
 
 let bindmounts_rw_from_conf pacman_conf =
   let r = Str.regexp {|Server = file://\(.*\)|} in
@@ -61,12 +62,12 @@ let chroot ?suffix ?pacman_conf ?makepkg_conf build update create path opt_direc
   in
   let resolve_conf kind opt default_paths =
     match opt with
-    | Some p when Sys.is_regular_file p -> p
+    | Some p when is_regular_file p -> p
     | Some p ->
         Printf.eprintf "chroot: %s configuration not found: %s\n" kind p;
         exit 2
     | None ->
-        match List.find_opt Sys.is_regular_file default_paths with
+        match List.find_opt is_regular_file default_paths with
         | Some p -> p
         | None -> diag_conf kind default_paths
   in
