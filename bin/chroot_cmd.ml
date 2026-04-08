@@ -41,7 +41,9 @@ let command =
        margs = flag "--margs" ~aliases:["--makepkg-args"] (optional string) ~doc:"
             Additional (comma-separated) makepkg arguments for makechrootpk. A default list of makepkg(8)
             arguments can be listed with makechrootpkg --help" and
-       suffix = flag "--suffix" (optional string) ~doc:"SUFFIX suffix for pacman/makepkg config file lookup" in
+       suffix = flag "--suffix" (optional string) ~doc:"SUFFIX suffix for pacman/makepkg config file lookup" and
+       pacman_conf = flag "-C" ~aliases:["--pacman-conf"] (optional string) ~doc:"FILE pacman.conf file used inside the container" and
+       makepkg_conf = flag "-M" ~aliases:["--makepkg-conf"] (optional string) ~doc:"FILE makepkg.conf file used inside the container" in
 
        let rec args_translate lst result =
          match lst with
@@ -77,7 +79,7 @@ let command =
                                             makechrootpkg_makepgkg_args_init in
 
        fun () -> Aur.Chroot.chroot
-                     ?suffix
+                     ?suffix ?pacman_conf ?makepkg_conf
                      build update create path
                      directory
                      bind_ro bind_rw

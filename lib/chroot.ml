@@ -15,7 +15,7 @@ let bindmounts_rw_from_conf pacman_conf =
       if Str.string_match r line 0 then Some (Str.matched_group 1 line)
       else None)
 
-let chroot ?suffix build update create path opt_directory opt_bind_ro
+let chroot ?suffix ?pacman_conf ?makepkg_conf build update create path opt_directory opt_bind_ro
     opt_bind_rw pkgnames makechrootpkg_args makechrootpkg_makepkg_args =
   (*TODO eventually change interface to --action, mutually exclusive in definition*)
   let count_action_requested =
@@ -59,16 +59,19 @@ let chroot ?suffix build update create path opt_directory opt_bind_ro
     List.iter (Printf.eprintf "  %s\n") paths;
     exit 2
   in
-  let pacman_conf =
-    match List.find_opt Sys.is_regular_file default_pacman_paths with
-    | Some p -> p
-    | None -> diag_conf "pacman" default_pacman_paths
+  let resolve_conf kind opt default_paths =
+    match opt with
+    | Some p when Sys.is_regular_file p -> p
+    | Some p ->
+        Printf.eprintf "chroot: %s configuration not found: %s\n" kind p;
+        exit 2
+    | None ->
+        match List.find_opt Sys.is_regular_file default_paths with
+        | Some p -> p
+        | None -> diag_conf kind default_paths
   in
-  let makepkg_conf =
-    match List.find_opt Sys.is_regular_file default_makepkg_paths with
-    | Some p -> p
-    | None -> diag_conf "makepkg" default_makepkg_paths
-  in
+  let pacman_conf = resolve_conf "pacman" pacman_conf default_pacman_paths in
+  let makepkg_conf = resolve_conf "makepkg" makepkg_conf default_makepkg_paths in
 
   if create then begin
     (*if packages listed use those, otherwise install base-devel and multilib-devel if multilib present in pacman config*)
