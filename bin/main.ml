@@ -6,6 +6,7 @@ let mode_of_string mode_as_string =
   | "pairs" -> Pairs
   | "table" -> Table
   | "json" -> Json
+  | "jsonl" -> JsonLines
   | s -> failwith ("unknown mode: " ^ s)
 
 let search = 
@@ -14,7 +15,8 @@ let search =
         ~readme:(fun () -> "More detailed information")
         [%map_open.Command
             let term = anon ("term" %: string)
-            and sort_criteria = anon (maybe ("sort_criteria" %: string)) in
+            (* and sort_criteria = anon (maybe ("sort_criteria" %: string)) in *)
+            in
                 fun () -> Lwt_main.run (Aur.Commands.search term)] 
 
 let depends = 
@@ -22,10 +24,32 @@ let depends =
       ~summary:"Get dependencies of pkg"
       ~readme:(fun () -> "More detailed information")
       [%map_open.Command
-       let pkgnames = anon (sequence ("pkgname" %: string)) and
-       output_mode = flag "--output-mode" (optional_with_default "pairs" string) ~doc:"MODE pairs|table|json" and
-       opt_reverse = flag "--reverse" no_arg ~doc:"reverse dependency" in
-           fun () -> Lwt_main.run (Aur.Depends.main pkgnames ~output_mode:(mode_of_string output_mode) ~opt_reverse)]
+       let targets = anon (sequence ("pkgname" %: string)) and
+       output_mode = flag "--output-mode" (optional_with_default "pairs" string) ~doc:"MODE pairs|table|json|jsonl" and
+       no_depends = flag "--no-depends" no_arg ~doc:"don't include depends" and
+       no_makedepends = flag "--no-makedepends" no_arg ~doc:"don't include makedepends" and
+       no_checkdepends = flag "--no-checkdepends" no_arg ~doc:"don't include checkdepends" and
+       optdepends = flag "--optdepends" no_arg ~doc:"include optdepends"and
+       opt_reverse = flag "--reverse" no_arg ~doc:"reverse dependency" and
+       assume_installed = flag "--assume-installed" (optional string) ~doc:"selectively remove dependencies, separate packages with a comma" and
+       no_provides = flag "--no-provides" no_arg ~doc:"Disable support for virutall dependencies" and
+       pkgname = flag "--pkgname" no_arg ~doc:"print package name instead of package base" and
+       verify = flag "--verify" no_arg ~doc:"verify versions" in
+           fun () -> Lwt_main.run (
+             Aur.Depends.main 
+              targets
+              ~output_mode:(mode_of_string output_mode) 
+              ~opt_reverse
+              ~include_depends:(not no_depends)
+              ~include_makedepends:(not no_makedepends)
+              ~include_checkdepends:(not no_checkdepends)
+              ~include_optdepends:optdepends
+              ~verify
+              ~installed:(Option.value_map assume_installed ~default:[] ~f:(String.split ~on:','))
+              ~provides:(not no_provides)
+              ~opt_pkgname:pkgname
+            )
+        ]
 
 let fetch = 
   Command.basic 

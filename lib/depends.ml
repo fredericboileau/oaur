@@ -1,5 +1,4 @@
 open Lwt.Syntax
-open Errors
 open Utils
 
 let aur_location = "https://aur.archlinux.org"
@@ -7,7 +6,7 @@ let aur_rpc_ver = 5
 let ua_header = Cohttp.Header.init_with "User-Agent" "oaur"
 let aur_callback_max = 30 [@@deriving show]
 
-type output_mode = Pairs | Table | Json
+type output_mode = Pairs | Table | Json | JsonLines
 
 type dep_type = Depends | MakeDepends | CheckDepends | OptDepends | Self
 [@@deriving yojson, show]
@@ -21,17 +20,23 @@ let dep_type_to_string = function
   | OptDepends -> "OptDepends"
   | Self -> "Self"
 
+(*override serializers / deserializers for deptype variant pair into flat dict with strings*)
 let required_by_to_yojson lst =
-  `Assoc (List.map (fun (name, dt) -> (name, `String (dep_type_to_string dt))) lst)
+  `Assoc
+    (List.map (fun (name, dt) -> (name, `String (dep_type_to_string dt))) lst)
 
 let required_by_of_yojson = function
   | `Assoc pairs ->
-    Result.ok (List.filter_map (fun (name, v) ->
-      match v with
-      | `String s -> (match dep_type_of_yojson (`List [`String s]) with
-                      | Ok dt -> Some (name, dt)
-                      | Error _ -> None)
-      | _ -> None) pairs)
+      Result.ok
+        (List.filter_map
+           (fun (name, v) ->
+             match v with
+             | `String s -> (
+                 match dep_type_of_yojson (`List [ `String s ]) with
+                 | Ok dt -> Some (name, dt)
+                 | Error _ -> None)
+             | _ -> None)
+           pairs)
   | _ -> Error "required_by_of_yojson: expected object"
 
 type aur_pkg = {
@@ -58,22 +63,39 @@ type aur_pkg = {
   keywords : string list; [@key "Keywords"] [@default []]
   license : string list; [@key "License"] [@default []]
   (*added after parsing, does not come from json*)
-  required_by : (string * dep_type) list; [@default []]
-    [@to_yojson required_by_to_yojson] [@of_yojson required_by_of_yojson]
+  required_by : (string * dep_type) list;
+      [@default []]
+      [@to_yojson required_by_to_yojson]
+      [@of_yojson required_by_of_yojson]
 }
 [@@deriving yojson { strict = false }, show]
 
-let empty_pkg name = {
-  name; required_by = [];
-  package_base = None; version = None;
-  depends = []; make_depends = []; check_depends = [];
-  opt_depends = []; provides = [];
-  description = None; url = None; url_path = None;
-  num_votes = None; popularity = None; out_of_date = None;
-  maintainer = None; submitter = None; first_submitted = None;
-  last_modified = None; id = None; package_base_id = None;
-  keywords = []; license = [];
-}
+let empty_pkg name =
+  {
+    name;
+    required_by = [];
+    package_base = None;
+    version = None;
+    depends = [];
+    make_depends = [];
+    check_depends = [];
+    opt_depends = [];
+    provides = [];
+    description = None;
+    url = None;
+    url_path = None;
+    num_votes = None;
+    popularity = None;
+    out_of_date = None;
+    maintainer = None;
+    submitter = None;
+    first_submitted = None;
+    last_modified = None;
+    id = None;
+    package_base_id = None;
+    keywords = [];
+    license = [];
+  }
 
 let expand_deps_from_type pkg deptype =
   match deptype with
@@ -345,8 +367,7 @@ let add_dag_to_results results dag dag_foreign show_all =
         let required_by =
           Hashtbl.fold (fun dep dt acc -> (dep, dt) :: acc) inner []
         in
-        let pkg = { (empty_pkg name) with required_by }
-        in
+        let pkg = { (empty_pkg name) with required_by } in
         Hashtbl.add results name pkg)
       dag_foreign
 
@@ -486,4 +507,9 @@ let main ?(include_depends = true) ?(include_makedepends = true)
                (fun name pkg acc -> (name, aur_pkg_to_yojson pkg) :: acc)
                results [])
         in
-        print_endline (Yojson.Safe.to_string json))
+        print_endline (Yojson.Safe.to_string json)
+    | JsonLines ->
+        Hashtbl.iter
+          (fun _name pkg ->
+            print_endline (Yojson.Safe.to_string (aur_pkg_to_yojson pkg)))
+          results)
