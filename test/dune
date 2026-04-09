@@ -1,2 +1,5 @@
-(test
- (name test_oaur))
+(library
+ (name test_oaur)
+ (inline_tests)
+ (libraries aur unix str)
+ (preprocess (pps ppx_jane)))
