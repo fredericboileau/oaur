@@ -46,24 +46,31 @@ let chroot ?suffix ?pacman_conf ?makepkg_conf ~build ~update ~create ~path
   in
 
   let diag_conf kind paths =
-    Printf.eprintf "chroot: %s configuration not found, looked in:\n" kind;
-    List.iter (Printf.eprintf "  %s\n") paths;
     let template =
       match kind with
       | "pacman" -> "/usr/share/devtools/pacman.conf.d/extra.conf"
       | "makepkg" -> "/usr/share/devtools/makepkg.conf.d/x86_64.conf"
       | _ -> "/usr/share/devtools"
     in
-    Printf.eprintf "chroot: consider copying a template, e.g.:\n";
-    Printf.eprintf "  cp %s /etc/aurutils/%s-%s.conf\n" template kind machine;
-    exit 2
+    let looked_in =
+      String.concat "\n" (List.map (Printf.sprintf "  %s") paths)
+    in
+    raise
+      (UsageError
+         (Printf.sprintf
+            "chroot: %s configuration not found, looked in:\n\
+             %s\n\
+             chroot: consider copying a template, e.g.:\n\
+            \  cp %s /etc/aurutils/%s-%s.conf"
+            kind looked_in template kind machine))
   in
   let resolve_conf kind opt default_paths =
     match opt with
     | Some p when is_regular_file p -> p
     | Some p ->
-        Printf.eprintf "chroot: %s configuration not found: %s\n" kind p;
-        exit 2
+        raise
+          (UsageError
+             (Printf.sprintf "chroot: %s configuration not found: %s" kind p))
     | None -> (
         match List.find_opt is_regular_file default_paths with
         | Some p -> p

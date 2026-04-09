@@ -78,12 +78,18 @@ let command =
                                             makechrootpkg_makepkg_args_translation
                                             makechrootpkg_makepgkg_args_init in
 
-       fun () -> Aur.Chroot.chroot
-                     ?suffix ?pacman_conf ?makepkg_conf
-                     ~build ~update ~create ~path
-                     ~directory
-                     ~bind_ro ~bind_rw
-                     ~pkgnames
-                     ~makechrootpkg_args
-                     ~makechrootpkg_makepkg_args
+       fun () ->
+         match Aur.Chroot.chroot
+                 ?suffix ?pacman_conf ?makepkg_conf
+                 ~build ~update ~create ~path
+                 ~directory
+                 ~bind_ro ~bind_rw
+                 ~pkgnames
+                 ~makechrootpkg_args
+                 ~makechrootpkg_makepkg_args
+         with
+         | () -> ()
+         | exception (Aur.Errors.UsageError msg | Failure msg | Aur.Errors.SubExn msg) ->
+             Printf.eprintf "%s\n" msg;
+             exit 1
     ]
