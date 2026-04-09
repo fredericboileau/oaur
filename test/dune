@@ -2,4 +2,4 @@
  (name test_oaur)
  (inline_tests)
  (libraries aur unix str)
- (preprocess (pps ppx_jane)))
+ (preprocess (pps ppx_inline_test)))

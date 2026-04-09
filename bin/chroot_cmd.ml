@@ -1,5 +1,3 @@
-open Core
-
 let command =
   Command.basic
     ~summary:"Manage containers for building packages"
@@ -45,38 +43,19 @@ let command =
        pacman_conf = flag "-C" ~aliases:["--pacman-conf"] (optional string) ~doc:"FILE pacman.conf file used inside the container" and
        makepkg_conf = flag "-M" ~aliases:["--makepkg-conf"] (optional string) ~doc:"FILE makepkg.conf file used inside the container" in
 
-       let rec args_translate lst result =
-         match lst with
-         | (true, translation)::tl -> args_translate tl (translation::result)
-         | (false, _)::tl -> args_translate tl result
-         | [] -> List.rev result
-       in
-       let makechrootpkg_makepkg_args_translation =
-           [(ignorearch, "--ignorearch"); (nocheck, "--nocheck")] in
+       let args_from_opt lst = List.filter_map (fun (b, s) -> if b then Some s else None) lst in
+       let split_opt = function Some s -> String.split_on_char ',' s | None -> [] in
 
-       let makechrootpkg_arg_translation =
-         [(namcap, "-n"); (checkpkg,"-C"); (temp, "-T")] in
-
-       let makechrootpkg_args_init = "-cu" ::
-                                       match cargs with
-                                       | Some str -> (String.split ~on:',' str)
-                                       | None -> []
+       let makechrootpkg_args =
+         "-cu"
+         :: split_opt cargs
+         @ args_from_opt [(namcap, "-n"); (checkpkg, "-C"); (temp, "-T")]
+         @ (match user with Some u -> ["-U"; u] | None -> [])
        in
-       let makechrootpkg_makepgkg_args_init = match margs with
-         | Some str -> String.split ~on:',' str
-         | None -> []
+       let makechrootpkg_makepkg_args =
+         split_opt margs
+         @ args_from_opt [(ignorearch, "--ignorearch"); (nocheck, "--nocheck")]
        in
-
-       let makechrootpkg_args = args_translate
-                                    makechrootpkg_arg_translation
-                                    makechrootpkg_args_init in
-       let makechrootpkg_args = match user with
-         | Some user -> List.append makechrootpkg_args ["-U"; user]
-         | None -> makechrootpkg_args
-       in
-       let makechrootpkg_makepkg_args = args_translate
-                                            makechrootpkg_makepkg_args_translation
-                                            makechrootpkg_makepgkg_args_init in
 
        fun () ->
          match Aur.Chroot.chroot
