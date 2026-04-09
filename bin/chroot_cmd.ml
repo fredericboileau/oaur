@@ -80,10 +80,10 @@ let command =
 
        fun () -> Aur.Chroot.chroot
                      ?suffix ?pacman_conf ?makepkg_conf
-                     build update create path
-                     directory
-                     bind_ro bind_rw
-                     pkgnames
-                     makechrootpkg_args
-                     makechrootpkg_makepkg_args
+                     ~build ~update ~create ~path
+                     ~directory
+                     ~bind_ro ~bind_rw
+                     ~pkgnames
+                     ~makechrootpkg_args
+                     ~makechrootpkg_makepkg_args
     ]

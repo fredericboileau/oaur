@@ -16,8 +16,9 @@ let bindmounts_rw_from_conf pacman_conf =
       if Str.string_match r line 0 then Some (Str.matched_group 1 line)
       else None)
 
-let chroot ?suffix ?pacman_conf ?makepkg_conf build update create path opt_directory opt_bind_ro
-    opt_bind_rw pkgnames makechrootpkg_args makechrootpkg_makepkg_args =
+let chroot ?suffix ?pacman_conf ?makepkg_conf ~build ~update ~create ~path ~directory:opt_directory
+    ~bind_ro:opt_bind_ro ~bind_rw:opt_bind_rw ~pkgnames ~makechrootpkg_args
+    ~makechrootpkg_makepkg_args =
   (*TODO eventually change interface to --action, mutually exclusive in definition*)
   let count_action_requested =
     List.fold_left
@@ -58,6 +59,13 @@ let chroot ?suffix ?pacman_conf ?makepkg_conf build update create path opt_direc
   let diag_conf kind paths =
     Printf.eprintf "chroot: %s configuration not found, looked in:\n" kind;
     List.iter (Printf.eprintf "  %s\n") paths;
+    let template = match kind with
+      | "pacman"  -> "/usr/share/devtools/pacman.conf.d/extra.conf"
+      | "makepkg" -> "/usr/share/devtools/makepkg.conf.d/x86_64.conf"
+      | _ -> "/usr/share/devtools"
+    in
+    Printf.eprintf "chroot: consider copying a template, e.g.:\n";
+    Printf.eprintf "  cp %s /etc/aurutils/%s-%s.conf\n" template kind machine;
     exit 2
   in
   let resolve_conf kind opt default_paths =
