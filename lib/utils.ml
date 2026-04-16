@@ -36,3 +36,8 @@ let run_capture cmd args =
   let r = In_channel.input_all inp in
   In_channel.close inp;
   String.trim r
+
+let is_readable p =
+  match Unix.access p [ Unix.R_OK ] with
+  | () -> true
+  | exception Unix.Unix_error _ -> false
