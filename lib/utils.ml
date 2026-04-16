@@ -1,56 +1,38 @@
-exception SubExn of string
+exception SubExn of int
 
-let run ?(suppress_output = true) (command, args) =
-  let args_array = Array.of_list (List.filter (fun str -> str <> "") args) in
-  if suppress_output then (
-    let dev_null = Unix.openfile "/dev/null" [ Unix.O_WRONLY ] 0o666 in
-    let pid =
-      Unix.create_process command args_array Unix.stdin dev_null dev_null
-    in
-    let _, status = Unix.waitpid [] pid in
-    Unix.close dev_null;
-    match status with
-    | Unix.WEXITED 0 -> ()
-    | Unix.WEXITED code ->
-        raise (SubExn (Printf.sprintf "Subprocess exited with code %d" code))
-    | _ -> raise (SubExn "Subprocess error"))
-  else
-    let _, status =
-      Unix.waitpid []
-        (Unix.create_process command args_array Unix.stdin Unix.stderr
-           Unix.stderr)
-    in
-    match status with
-    | Unix.WEXITED 0 -> ()
-    | Unix.WEXITED code ->
-        raise (SubExn (Printf.sprintf "Subprocess exited with code %d" code))
-    | _ -> raise (SubExn "Subprocess error")
+let run_exn ?(to_stderr = false) ?(env = Unix.environment ()) cmd args =
+  let args_array = Array.of_list (cmd :: args) in
+  let stdout = if to_stderr then Unix.stderr else Unix.stdout in
+  let pid =
+    Unix.create_process_env cmd args_array env Unix.stdin stdout Unix.stderr
+  in
+  let _, status = Unix.waitpid [] pid in
+  match status with
+  | Unix.WEXITED 0 -> ()
+  | Unix.WEXITED code -> raise (SubExn code)
+  | _ -> raise (SubExn 1)
 
-let exit_code_of_status = function
-  | Unix.WEXITED n -> n
-  | Unix.WSIGNALED _ | Unix.WSTOPPED _ -> 1
+let run ?(to_stderr = false) ?(env = Unix.environment ()) cmd args =
+  let args_array = Array.of_list (cmd :: args) in
+  let stdout = if to_stderr then Unix.stderr else Unix.stdout in
+  let pid =
+    Unix.create_process_env cmd args_array env Unix.stdin stdout Unix.stderr
+  in
+  let _, status = Unix.waitpid [] pid in
+  status
 
-let run_noexn ?(suppress_output = true) ?(env = Unix.environment ()) (command, args) =
-  let args_array = Array.of_list (List.filter (fun str -> str <> "") args) in
-  if suppress_output then (
-    let dev_null = Unix.openfile "/dev/null" [ Unix.O_WRONLY ] 0o666 in
-    let pid =
-      Unix.create_process_env command args_array env Unix.stdin dev_null dev_null
-    in
-    let _, status = Unix.waitpid [] pid in
-    Unix.close dev_null;
-    status)
-  else
-    let _, status =
-      Unix.waitpid []
-        (Unix.create_process_env command args_array env Unix.stdin Unix.stderr
-           Unix.stderr)
-    in
-    status
+let run_with_arg0 ?(to_stderr = false) ?(env = Unix.environment ()) name cmd =
+  let cmd = Array.of_list cmd in
+  let stdout = if to_stderr then Unix.stderr else Unix.stdout in
+  let pid =
+    Unix.create_process_env name cmd env Unix.stdin stdout Unix.stderr
+  in
+  let _, status = Unix.waitpid [] pid in
+  status
 
-let run_read_all (cmd, args) =
-  let args_array = Array.of_list (List.filter (fun str -> str <> "") args) in
+let run_capture cmd args =
+  let args_array = Array.of_list (cmd :: args) in
   let inp = Unix.open_process_args_in cmd args_array in
   let r = In_channel.input_all inp in
   In_channel.close inp;
-  r
+  String.trim r

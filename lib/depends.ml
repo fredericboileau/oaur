@@ -160,6 +160,7 @@ let recurse pkgnames types =
     if batch = [] then Lwt.return ()
     else
       let* json_list = fetchinfo batch in
+      (*TODO error out on aur_pkg_of_json failure*)
       let level =
         List.filter_map
           (fun j ->
@@ -250,8 +251,7 @@ let graph ~provides ~verify results pkgdeps pkgmap =
   (* use vercmp from archlinux distribution with vercmp_run *)
   let vercmp ver1 ver2 op =
     let vercmp_run ver1 ver2 =
-      int_of_string
-        (String.trim (run_read_all ("vercmp", [ "vercmp"; ver1; ver2 ])))
+      int_of_string @@ run_capture "vercmp" [ ver1; ver2 ]
     in
     match (ver2, op) with
     | None, _ | _, None -> true

@@ -60,12 +60,13 @@ let command =
        fun () ->
          match Aur.Chroot.chroot
                  ?suffix ?pacman_conf ?makepkg_conf
+                 ?directory
                  ~build ~update ~create ~path
-                 ~directory
                  ~bind_ro ~bind_rw
                  ~pkgnames
                  ~makechrootpkg_args
                  ~makechrootpkg_makepkg_args
+                 ()
          with
          | () -> ()
          | exception (Aur.Errors.UsageError msg | Failure msg | Aur.Errors.SubExn msg) ->

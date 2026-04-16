@@ -61,16 +61,12 @@ let search term =
 
 let fetch_exn syncmode discard pkgname =
   let pkglocation = aur_location ^ "/" ^ pkgname in
-  let command =
-    ("git", [ "git"; "ls-remote"; "--exit-code"; "-q"; pkglocation ])
-  in
-  let status = run_noexn command in
+  let status = run "git" [ "ls-remote"; "--exit-code"; "-q" ] in
   ignore
     (match status with
     | Unix.WEXITED 0 -> ()
-    | Unix.WEXITED _ ->
-        raise (SubExn (Printf.sprintf "Pkg %s is not in AUR\n" pkgname))
-    | _ -> raise (SubExn "Subprocess error"));
+    | Unix.WEXITED _ -> raise (SubExn 1)
+    | _ -> raise (SubExn 1));
 
   let pathtocheck = Filename.concat pkgname ".git" in
   let pathclean =
@@ -78,19 +74,19 @@ let fetch_exn syncmode discard pkgname =
   in
 
   (*TODO add results file? *)
-  if pathclean then run ("git", [ "git"; "clone"; pkglocation ])
+  if pathclean then run_exn "git" [ "clone"; pkglocation ]
   else
     let git = [ "git"; "-C"; pkgname ] in
     let ( @ ) = List.append in
     let sync_should_merge upstream dest =
       let status =
-        run_noexn
-          ("git", git @ [ "merge-base"; "--is-ancestor"; upstream; dest ])
+        run_with_arg0 "git"
+          (git @ [ "merge-base"; "--is-ancestor"; upstream; dest ])
       in
       match status with
       | Unix.WEXITED 0 -> false
       | Unix.WEXITED 1 -> true
-      | _ -> raise (SubExn "git merge-base error")
+      | _ -> raise (SubExn 1)
     in
     (* sync code goes here*)
 
@@ -98,7 +94,7 @@ let fetch_exn syncmode discard pkgname =
 
     (* let fd = Unix.openfile pathtocheck [Unix.O_RDONLY] 0o640 in *)
     (* Flock.flock fd LOCK_EX; *)
-    run ("git", git @ [ "fetch"; "origin" ]);
+    let _ = run_with_arg0 "git" (git @ [ "fetch"; "origin" ]) in
 
     (* let orig_head = String.trim( *)
     (*     run_read_all("git", git @ ["rev-parse"; "--verify"; "HEAD"])) in *)
@@ -113,21 +109,19 @@ let fetch_exn syncmode discard pkgname =
         | badsyncmode ->
             failwith (Printf.sprintf "Bad syncmode: %s" badsyncmode)
       in
-      try
-        match syncmode with
-        | "merge" ->
-            if discard then run ("git", git @ [ "checkout"; "./" ]);
-            run ("git", git @ [ "merge"; upstream ])
-        | "rebase" ->
-            if discard then run ("git", git @ [ "checkout"; "./" ]);
-            run ("git", git @ [ "rebase"; upstream ])
-        | "reset" -> run ("git", git @ [ "reset"; "--hard"; dest ])
-        | "fetch" -> ()
-        | badsyncmode ->
-            failwith (Printf.sprintf "Bad syncmode: %s" badsyncmode)
-      with SubExn _ ->
-        raise
-          (SubExn (Printf.sprintf "fetch: failed to %s %s" syncmode pkgname))
+      match syncmode with
+      | "merge" ->
+          if discard then
+            let _ = run_with_arg0 "git" (git @ [ "checkout"; "./" ]) in
+            ignore (run_with_arg0 "git" (git @ [ "merge"; upstream ]))
+      | "rebase" ->
+          if discard then
+            let _ = run_with_arg0 "git" (git @ [ "checkout"; "./" ]) in
+            ignore (run_with_arg0 "git" (git @ [ "rebase"; upstream ]))
+      | "reset" ->
+          ignore (run_with_arg0 "git" (git @ [ "reset"; "--hard"; dest ]))
+      | "fetch" -> ()
+      | badsyncmode -> failwith (Printf.sprintf "Bad syncmode: %s" badsyncmode)
 
 (* Flock.flock fd LOCK_UN; *)
 
@@ -137,5 +131,4 @@ let fetch_exn syncmode discard pkgname =
 (*TODO cli should pass list*)
 
 let fetch pkgnames syncmode discard =
-  try List.iter (fetch_exn syncmode discard) pkgnames
-  with SubExn msg -> Printf.printf "Error: %s" msg
+  List.iter (fetch_exn syncmode discard) pkgnames
