@@ -82,17 +82,7 @@ let chroot ~build ~update ~create ~path ?directory ~bind_ro:opt_bind_ro
   let pacman_conf = require_conf machine "pacman" pacman_conf_opt in
   let makepkg_conf = require_conf machine "makepkg" makepkg_conf_opt in
 
-  let count_action_requested =
-    List.fold_left
-      (fun acc x -> if x then acc + 1 else acc)
-      0
-      [ build; update; create; path ]
-  in
-  if count_action_requested > 1 then
-    raise
-      (UsageError
-         "exactly one of --build, --update, --create, --path must be specified")
-  else if count_action_requested = 0 then
+  if not (update || build || create || path) then
     Printf.printf "chroot:%s\npacman:%s\nmakepkg:%s\n" directory pacman_conf
       makepkg_conf
   else begin
@@ -134,7 +124,7 @@ let chroot ~build ~update ~create ~path ?directory ~bind_ro:opt_bind_ro
       (*update and build need bindmounts from file sections in pacmanconf*)
       let pacman_conf_bindmounts_rw = bindmounts_rw_from_conf pacman_conf in
 
-      if update then
+      if update then begin
         let bind_ro = List.map (fun b -> "--bind-ro=" ^ b) opt_bind_ro in
         let bind_rw =
           List.map
@@ -142,7 +132,7 @@ let chroot ~build ~update ~create ~path ?directory ~bind_ro:opt_bind_ro
             (opt_bind_rw @ pacman_conf_bindmounts_rw)
         in
         run_exn "sudo"
-          ([
+        @@ [
              "arch-nspawn";
              "-C";
              pacman_conf;
@@ -150,26 +140,26 @@ let chroot ~build ~update ~create ~path ?directory ~bind_ro:opt_bind_ro
              makepkg_conf;
              directory // "root";
            ]
-          @ bind_rw @ bind_ro
-          @ [ "pacman"; "-Syu"; "--noconfirm" ]
-          @ pkgnames)
-      else if build then
+        @ bind_rw @ bind_ro
+        @ [ "pacman"; "-Syu"; "--noconfirm" ]
+        @ pkgnames
+      end;
+
+      if build then begin
         let bind_ro = List.map (fun b -> "-D" ^ b) opt_bind_ro in
         let bind_rw = List.map (fun b -> "-d" ^ b) pacman_conf_bindmounts_rw in
         run_exn "sudo"
-          ([
+        @@ [
              "--preserve-env=SRCDEST,SRCPKGDEST,PKGDEST,LOGDEST,MAKEFLAGS,PACKAGER,GNUPGHOME,SSH_AUTH_SOCK";
              "makechrootpkg";
              "-r";
              directory;
            ]
-          @ bind_ro @ bind_rw @ makechrootpkg_args @ [ "--" ]
-          @ makechrootpkg_makepkg_args)
-      else if path then
-        (* if path *)
+        @ bind_ro @ bind_rw @ makechrootpkg_args @ [ "--" ]
+        @ makechrootpkg_makepkg_args
+      end;
+      if path then
         let realpath = run_capture "realpath" [ "--"; directory // "root" ] in
-
         print_endline realpath
-      else assert false
     end
   end
