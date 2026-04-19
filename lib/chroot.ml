@@ -71,9 +71,9 @@ let bindmounts_rw_from_conf pacman_conf =
       if Str.string_match r line 0 then Some (Str.matched_group 1 line)
       else None)
 
-let chroot ~build ~update ~create ~path ?directory ~bind_ro:opt_bind_ro
-    ~bind_rw:opt_bind_rw ~pkgnames ~makechrootpkg_args
-    ~makechrootpkg_makepkg_args ?suffix ?pacman_conf ?makepkg_conf () =
+let chroot ~build ~update ~create ~path ?directory ?(bind_ro = [])
+    ?(bind_rw = []) ?(pkgnames = []) ?(makechrootpkg_args = [ "-cu" ])
+    ?(makechrootpkg_makepkg_args = []) ?suffix ?pacman_conf ?makepkg_conf () =
   let machine = run_capture "uname" [ "uname"; "-m" ] in
   let directory, pacman_conf_opt, makepkg_conf_opt =
     get_default_paths_exn machine ?suffix ?directory ?pacman_conf ?makepkg_conf
@@ -125,11 +125,11 @@ let chroot ~build ~update ~create ~path ?directory ~bind_ro:opt_bind_ro
       let pacman_conf_bindmounts_rw = bindmounts_rw_from_conf pacman_conf in
 
       if update then begin
-        let bind_ro = List.map (fun b -> "--bind-ro=" ^ b) opt_bind_ro in
+        let bind_ro = List.map (fun b -> "--bind-ro=" ^ b) bind_ro in
         let bind_rw =
           List.map
             (fun b -> "--bind=" ^ b)
-            (opt_bind_rw @ pacman_conf_bindmounts_rw)
+            (bind_rw @ pacman_conf_bindmounts_rw)
         in
         run_exn "sudo"
         @@ [
@@ -146,7 +146,7 @@ let chroot ~build ~update ~create ~path ?directory ~bind_ro:opt_bind_ro
       end;
 
       if build then begin
-        let bind_ro = List.map (fun b -> "-D" ^ b) opt_bind_ro in
+        let bind_ro = List.map (fun b -> "-D" ^ b) bind_ro in
         let bind_rw = List.map (fun b -> "-d" ^ b) pacman_conf_bindmounts_rw in
         run_exn "sudo"
         @@ [
