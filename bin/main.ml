@@ -66,7 +66,8 @@ let command =
     Command.group
         ~summary:"aur utilities clone of aurutils" 
         ~readme:(fun () -> "oaur is the command wrapper for oaurutils.")
-        [("search", search); ("depends", depends); ("fetch", fetch); ("chroot", Chroot_cmd.command)]
+        [("search", search); ("depends", depends); ("fetch", fetch); 
+        ("chroot", Chroot_cmd.command); ("build", Build_cmd.command)]
 
 
 let () = Command_unix.run ~version:"1.0" ~build_info:"RWO" command

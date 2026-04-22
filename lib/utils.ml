@@ -1,4 +1,3 @@
-exception SubExn of int
 
 let args_from_boolean lst = List.filter_map (fun (b, s) -> if b then Some s else None) lst
 
@@ -9,8 +8,8 @@ let run_exn ?(to_stderr = false) ?(env = Unix.environment ()) cmd args =
   let _, status = Unix.waitpid [] pid in
   match status with
   | Unix.WEXITED 0 -> ()
-  | Unix.WEXITED code -> raise (SubExn code)
-  | _ -> raise (SubExn 1)
+  | Unix.WEXITED code -> raise (Errors.SubExn (String.concat " " (cmd :: args), code))
+  | _ -> raise (Errors.SubExn (String.concat " " (cmd :: args), 1))
 
 let run ?(to_stderr = false) ?(env = Unix.environment ()) cmd args =
   let args_array = Array.of_list (cmd :: args) in

@@ -69,7 +69,10 @@ let command =
                  ()
          with
          | () -> ()
-         | exception (Aur.Errors.UsageError msg | Failure msg | Aur.Errors.SubExn msg) ->
+         | exception (Aur.Errors.UsageError msg | Failure msg) ->
              Printf.eprintf "%s\n" msg;
+             exit 1
+         | exception Aur.Errors.SubExn (cmd, code) ->
+             Printf.eprintf "%s: exited with error code %d\n" cmd code;
              exit 1
     ]

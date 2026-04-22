@@ -1,6 +1,6 @@
 (library
  (name aur)
- (libraries core core_unix.command_unix core_unix.date_unix uri 
+ (libraries core core_unix core_unix.command_unix core_unix.date_unix core_unix.filename_unix core_unix.sys_unix uri
             cohttp-lwt-unix tls-lwt ocolor yojson str ppx_deriving_yojson.runtime ppx_deriving.show)
  (preprocess (pps ppx_jane ppx_deriving_yojson ppx_deriving.show)))
 

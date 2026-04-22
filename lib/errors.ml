@@ -1,2 +1,2 @@
-exception SubExn of string
+exception SubExn of string * int
 exception UsageError of string

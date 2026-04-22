@@ -1,7 +1,7 @@
 (executable
  (public_name oaur)
  (name main)
- (modules main chroot_cmd)
+ (modules main chroot_cmd build_cmd)
  (libraries aur)
  (preprocess (pps lwt_ppx ppx_jane)))
 (env

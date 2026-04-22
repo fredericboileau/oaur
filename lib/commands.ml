@@ -65,8 +65,8 @@ let fetch_exn syncmode discard pkgname =
   ignore
     (match status with
     | Unix.WEXITED 0 -> ()
-    | Unix.WEXITED _ -> raise (SubExn 1)
-    | _ -> raise (SubExn 1));
+    | Unix.WEXITED code -> raise (Errors.SubExn ("git ls-remote --exit-code -q", code))
+    | _ -> raise (Errors.SubExn ("git ls-remote --exit-code -q", 1)));
 
   let pathtocheck = Filename.concat pkgname ".git" in
   let pathclean =
@@ -86,7 +86,7 @@ let fetch_exn syncmode discard pkgname =
       match status with
       | Unix.WEXITED 0 -> false
       | Unix.WEXITED 1 -> true
-      | _ -> raise (SubExn 1)
+      | _ -> raise (Errors.SubExn ("git merge-base --is-ancestor", 1))
     in
     (* sync code goes here*)
 
