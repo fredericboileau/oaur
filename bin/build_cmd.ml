@@ -72,13 +72,22 @@ let command =
         flag "--cargs" ~aliases:[ "--makechrootpkg-args" ] (listed string)
           ~doc:"ARG Extra makechrootpkg argument (repeatable)"
       and buildscript =
-        flag "-p" (optional string) ~doc:"FILE Use FILE as the build script" in
+        flag "-p" (optional string) ~doc:"FILE Use FILE as the build script"
+      and verify =
+        flag "-v" ~aliases:[ "--verify" ] no_arg ~doc:"Verify package signatures"
+      and remove =
+        flag "-R" ~aliases:[ "--remove" ] no_arg ~doc:"Remove old package from database"
+      and new_only =
+        flag "--new" no_arg ~doc:"Only add packages that are not already in the database"
+      and prevent_downgrade =
+        flag "--prevent-downgrade" no_arg ~doc:"Do not add packages with a lower version" in
       fun () ->
         match
           Aur.Build.main ~sign_package ?queuefile ?opt_db_ext:db_ext ?opt_db_name:db_name
             ?pacman_conf ?makepkg_conf ?root ~chroot ~status ?buildscript ?results_file
             ~results_append ~force ~run_pkgver ~ignorearch ~nocheck ~noconfirm ~rmdeps ~syncdeps
-            ~bind_ro ~bind_rw ~namcap ~checkpkg ~temp ?user ~margs ~cargs ()
+            ~bind_ro ~bind_rw ~namcap ~checkpkg ~temp ?user ~margs ~cargs
+            ~verify ~remove ~new_only ~prevent_downgrade ()
         with
         | () -> ()
         | exception (Aur.Errors.UsageError msg | Failure msg) ->

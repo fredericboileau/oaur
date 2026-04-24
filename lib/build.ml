@@ -5,6 +5,7 @@ open Core
 let argv0 = "build"
 let default_from_env x env_key = match x with Some _ -> x | None -> Sys.getenv env_key
 let default_gpg_args = [ "--detach-sign"; "--no-armor"; "--batch" ]
+let prefix dir lst = List.map lst ~f:(Filename.concat dir)
 
 let check_readable_if_not_none = function
   | None -> ()
@@ -28,7 +29,7 @@ let diag_moved_packages dir =
   let files = Sys_unix.readdir dir |> Array.to_list |> List.map ~f:(Filename.concat dir) in
   eprint_indented 8 files
 
-let resolve_should_build ?makepkg_conf ?results_file ~db_root () =
+let existing_pkglist_if_all ?makepkg_conf ?results_file ~db_root () =
   let pkglist =
     let env = Array.append (Core_unix.environment ()) [| "PKGDEST=" ^ db_root |] in
     let makepkg_args =
@@ -60,13 +61,14 @@ let resolve_should_build ?makepkg_conf ?results_file ~db_root () =
         Out_channel.with_file ~append:true path ~f:(fun oc ->
             List.iter existing_pkglist ~f:(Out_channel.fprintf oc "exist:file://%s\n")));
 
-  (not all_exist, pkglist)
+  if all_exist then Some existing_pkglist else None
 
 let main ~sign_package ?queuefile ?opt_db_ext ?opt_db_name ?pacman_conf ?makepkg_conf ?root
     ~chroot ~status ?buildscript ?results_file ?(results_append = false) ?(run_pkgver = false)
     ?(ignorearch = false) ?(nocheck = false) ?(noconfirm = false) ?(rmdeps = false)
     ?(syncdeps = false) ?(force = false) ?(bind_ro = []) ?(bind_rw = []) ?(namcap = false)
-    ?(checkpkg = false) ?(temp = false) ?user ?(margs = []) ?(cargs = []) () =
+    ?(checkpkg = false) ?(temp = false) ?user ?(margs = []) ?(cargs = []) ?db_pool
+    ?(verify = false) ?(remove = false) ?(new_only = false) ?(prevent_downgrade = false) () =
   let db_ext = default_from_env opt_db_ext "AUR_DBEXT" in
   let db_name = default_from_env opt_db_name "AUR_REPO" in
 
@@ -121,10 +123,14 @@ let main ~sign_package ?queuefile ?opt_db_ext ?opt_db_name ?pacman_conf ?makepkg
     match queuefile with Some f -> In_channel.read_lines f | None -> [ Sys_unix.getcwd () ]
   in
 
-  if not sign_package then begin
-    match Sys_unix.is_file [%string "%{db_root}/%{db_name}.sig"] with
-    | `Yes -> raise (UsageError "database signature found, but signing is disabled\n")
-    | `No | `Unknown -> ()
+  let db_sigs =
+    [ [%string "%{db_root}/%{db_name}.sig"]; [%string "%{db_root}/%{db_name}.files.sig"] ]
+  in
+  if (not sign_package) && file_exists (List.hd_exn db_sigs) then begin
+    let db_sigs_str = String.concat ~sep:"\n" db_sigs in
+    raise
+      (UsageError
+         ([%string "%{argv0}: database signature found, but signing is disabled\n"] ^ db_sigs_str))
   end;
 
   (*verify key*)
@@ -138,6 +144,16 @@ let main ~sign_package ?queuefile ?opt_db_ext ?opt_db_name ?pacman_conf ?makepkg
     Chroot.chroot ~build:false ~update:true ~create:true ~path:false ?directory:root
       ~suffix:db_name ?pacman_conf ?makepkg_conf ();
 
+  let repo_add_args =
+    args_from_boolean
+      [
+        (sign_package, "-s");
+        (verify, "-v");
+        (remove, "-R");
+        (new_only, "-n");
+        (prevent_downgrade, "-p");
+      ]
+  in
   let makepkg_common_args =
     Option.value_map makepkg_conf ~default:[] ~f:(fun c -> [ "--config"; c ])
     @ Option.value_map buildscript ~default:[] ~f:(fun b -> [ "-p"; b ])
@@ -150,17 +166,6 @@ let main ~sign_package ?queuefile ?opt_db_ext ?opt_db_name ?pacman_conf ?makepkg
           (syncdeps, "--syncdeps");
         ]
   in
-  let makechrootpkg_args =
-    ("-cu" :: cargs)
-    @ args_from_boolean [ (namcap, "-n"); (checkpkg, "-C"); (temp, "-T") ]
-    @ Option.value_map user ~default:[] ~f:(fun u -> [ "-U"; u ])
-  in
-  let makechrootpkg_makepkg_args =
-    margs
-    @ args_from_boolean [ (ignorearch, "--ignorearch"); (nocheck, "--nocheck") ]
-    @ if run_pkgver then [ "--holdver" ] else []
-  in
-
   let tmpdir = Option.value (Sys.getenv "TMPDIR") ~default:"/var/tmp" in
   let aurutils_dir = tmpdir ^ "/aurutils" ^ string_of_int @@ Core_unix.getuid () in
   run_exn "mkdir" [ "-pm"; "0700"; "--"; aurutils_dir ];
@@ -175,22 +180,92 @@ let main ~sign_package ?queuefile ?opt_db_ext ?opt_db_name ?pacman_conf ?makepkg
       List.iter pkgdirs ~f:(fun pkg ->
           Sys_unix.chdir startdir;
           Sys_unix.chdir pkg;
-          match Sys_unix.is_file "PKGBUILD" with
-          | `Yes -> begin
-              if run_pkgver then run_exn "makepkg" ("-od" :: makepkg_common_args);
-              let should_build, pkglist =
-                if force then (true, []) (*pkglist populated *)
-                else resolve_should_build ?makepkg_conf ?results_file ~db_root ()
+          if not (file_exists "PKGBUILD") then
+            raise (UsageError [%string "PKGBUILD does not exist for %{pkg}"])
+          else begin
+            (*update PKGBUILD version*)
+            if run_pkgver then run_exn "makepkg" ("-od" :: makepkg_common_args);
+            let create_package, pre_pkglist =
+              if force then (true, [])
+              else
+                (*only consider prebuilt if all are built otherwise create fresh*)
+                (*do_all_exist returns None if not all exist*)
+                match existing_pkglist_if_all ?makepkg_conf ?results_file ~db_root () with
+                | Some existing -> (false, existing)
+                | None -> (true, [])
+            in
+            if create_package then begin
+              let env =
+                Array.append (Core_unix.environment ())
+                @@ Array.of_list (("PKGDEST=" ^ var_tmp) :: makepkg_env)
               in
-              if should_build then
-                let env =
-                  Array.append (Core_unix.environment ())
-                  @@ Array.of_list (("PKGDEST=" ^ var_tmp) :: makepkg_env)
+              if chroot then
+                let makechrootpkg_args =
+                  ("-cu" :: cargs)
+                  @ args_from_boolean [ (namcap, "-n"); (checkpkg, "-C"); (temp, "-T") ]
+                  @ Option.value_map user ~default:[] ~f:(fun u -> [ "-U"; u ])
                 in
-                if chroot then
-                  Chroot.chroot ~build:true ~update:false ~create:false ~path:false ~env ~bind_ro
-                    ~bind_rw ~makechrootpkg_args ~makechrootpkg_makepkg_args ?directory:root
-                    ~suffix:db_name ?pacman_conf ?makepkg_conf ()
-                else run_exn "makepkg" makepkg_common_args
+                let makechrootpkg_makepkg_args =
+                  margs
+                  @ args_from_boolean [ (ignorearch, "--ignorearch"); (nocheck, "--nocheck") ]
+                  @ if run_pkgver then [ "--holdver" ] else []
+                in
+                Chroot.chroot ~build:true ~update:false ~create:false ~path:false ~env ~bind_ro
+                  ~bind_rw ~makechrootpkg_args ~makechrootpkg_makepkg_args ?directory:root
+                  ~suffix:db_name ?pacman_conf ?makepkg_conf ()
+              else run_exn ~env "makepkg" @@ makepkg_common_args @ margs
+            end;
+            let pkglist =
+              if create_package then
+                Sys_unix.readdir var_tmp |> Array.to_list
+                |> List.filter ~f:(fun f -> not (String.is_suffix f ~suffix:".sig"))
+              else List.map pre_pkglist ~f:Filename.basename
+            in
+            let siglist =
+              List.filter_map pkglist ~f:(fun pkg ->
+                  let sig_name = [%string "%{pkg}.sig"] in
+                  (*signature from makepkg --sign*)
+                  if file_exists (Filename.concat var_tmp sig_name) then Some sig_name
+                  else if
+                    (*skipped package build with signature*)
+                    file_exists [%string "%{db_root}/%{sig_name}"]
+                    && not (file_exists (Filename.concat var_tmp pkg))
+                  then begin
+                    prerr_endline
+                      [%string "%{argv0}: existing signature file %{db_root}/%{sig_name}"];
+                    None
+                  end
+                  else if sign_package then begin
+                    (*no candidate signature, generate one*)
+                    let pkg_src =
+                      if create_package then Filename.concat var_tmp pkg
+                      else Filename.concat db_root pkg
+                    in
+                    run_exn "gpg"
+                    @@ gpg_args @ [ "--output"; Filename.concat var_tmp sig_name; pkg_src ];
+                    Some sig_name
+                  end
+                  (*signing disabled, no local sig file, no sig in db_root or the package exists locally*)
+                    else None)
+            in
+            if create_package then begin
+              (match db_pool with
+              | Some pool ->
+                  run_exn "mv" ([ "-f" ] @ prefix var_tmp siglist @ prefix var_tmp pkglist @ [ pool ]);
+                  run_exn "ln" @@ [ "-st"; db_root; "--" ] @ prefix pool pkglist @ prefix pool siglist
+              | None ->
+                  run_exn "mv" ([ "-f" ] @ prefix var_tmp siglist @ prefix var_tmp pkglist @ [ db_root ]));
+              Option.iter results_file ~f:(fun path ->
+                  Out_channel.with_file ~append:true path ~f:(fun oc ->
+                      List.iter pkglist ~f:(fun p ->
+                          Out_channel.fprintf oc "build:file://%s\n" (Filename.concat db_root p))))
             end
-          | `No | `Unknown -> raise (UsageError [%string "PKGBUILD does not exist for %{pkg}"])))
+            else if not (List.is_empty siglist) then
+              run_exn "mv" ([ "-f" ] @ prefix var_tmp siglist @ [ db_root ]);
+            Sys_unix.chdir db_root;
+            let env = Array.append (Core_unix.environment ()) [| "LANG=C" |] in
+            run_exn ~env "repo-add" @@ repo_add_args @ [ db_path ] @ pkglist;
+            Sys_unix.chdir startdir
+            (* if not chroot && not no_sync then *)
+            (*   Aur.Sync.main sync_args db_name sysupgrade *)
+          end))
