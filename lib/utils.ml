@@ -1,4 +1,3 @@
-
 let args_from_boolean lst = List.filter_map (fun (b, s) -> if b then Some s else None) lst
 
 let run_exn ?(to_stderr = false) ?(env = Unix.environment ()) cmd args =
@@ -34,6 +33,8 @@ let run_capture ?(env = Unix.environment ()) cmd args =
 
 let is_readable p =
   match Unix.access p [ Unix.R_OK ] with () -> true | exception Unix.Unix_error _ -> false
+
+let file_exists p = match Sys_unix.file_exists p with `Yes -> true | `No | `Unknown -> false
 
 let tee oc s =
   print_string s;

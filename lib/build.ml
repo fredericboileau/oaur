@@ -68,7 +68,8 @@ let main ~sign_package ?queuefile ?opt_db_ext ?opt_db_name ?pacman_conf ?makepkg
     ?(ignorearch = false) ?(nocheck = false) ?(noconfirm = false) ?(rmdeps = false)
     ?(syncdeps = false) ?(force = false) ?(bind_ro = []) ?(bind_rw = []) ?(namcap = false)
     ?(checkpkg = false) ?(temp = false) ?user ?(margs = []) ?(cargs = []) ?db_pool
-    ?(verify = false) ?(remove = false) ?(new_only = false) ?(prevent_downgrade = false) () =
+    ?(verify = false) ?(remove = false) ?(new_only = false) ?(prevent_downgrade = false)
+    ?(nosync = false) () =
   let db_ext = default_from_env opt_db_ext "AUR_DBEXT" in
   let db_name = default_from_env opt_db_name "AUR_REPO" in
 
@@ -241,8 +242,8 @@ let main ~sign_package ?queuefile ?opt_db_ext ?opt_db_name ?pacman_conf ?makepkg
                       if create_package then Filename.concat var_tmp pkg
                       else Filename.concat db_root pkg
                     in
-                    run_exn "gpg"
-                    @@ gpg_args @ [ "--output"; Filename.concat var_tmp sig_name; pkg_src ];
+                    run_exn "gpg" @@ gpg_args
+                    @ [ "--output"; Filename.concat var_tmp sig_name; pkg_src ];
                     Some sig_name
                   end
                   (*signing disabled, no local sig file, no sig in db_root or the package exists locally*)
@@ -251,10 +252,13 @@ let main ~sign_package ?queuefile ?opt_db_ext ?opt_db_name ?pacman_conf ?makepkg
             if create_package then begin
               (match db_pool with
               | Some pool ->
-                  run_exn "mv" ([ "-f" ] @ prefix var_tmp siglist @ prefix var_tmp pkglist @ [ pool ]);
-                  run_exn "ln" @@ [ "-st"; db_root; "--" ] @ prefix pool pkglist @ prefix pool siglist
+                  run_exn "mv" @@ [ "-f" ] @ prefix var_tmp siglist @ prefix var_tmp pkglist
+                  @ [ pool ];
+                  run_exn "ln" @@ [ "-st"; db_root; "--" ] @ prefix pool pkglist
+                  @ prefix pool siglist
               | None ->
-                  run_exn "mv" ([ "-f" ] @ prefix var_tmp siglist @ prefix var_tmp pkglist @ [ db_root ]));
+                  run_exn "mv"
+                    ([ "-f" ] @ prefix var_tmp siglist @ prefix var_tmp pkglist @ [ db_root ]));
               Option.iter results_file ~f:(fun path ->
                   Out_channel.with_file ~append:true path ~f:(fun oc ->
                       List.iter pkglist ~f:(fun p ->
@@ -265,7 +269,57 @@ let main ~sign_package ?queuefile ?opt_db_ext ?opt_db_name ?pacman_conf ?makepkg
             Sys_unix.chdir db_root;
             let env = Array.append (Core_unix.environment ()) [| "LANG=C" |] in
             run_exn ~env "repo-add" @@ repo_add_args @ [ db_path ] @ pkglist;
-            Sys_unix.chdir startdir
-            (* if not chroot && not no_sync then *)
-            (*   Aur.Sync.main sync_args db_name sysupgrade *)
+            Sys_unix.chdir startdir;
+
+            if (not chroot) && not nosync then
+              let auth = Option.value (Sys.getenv "AUR_PACMAN_AUTH") ~default:"sudo" in
+              let sync_args =
+                [ "-d"; db_name; "--sysupgrade" ]
+                @ args_from_boolean [ (noconfirm, "--noconfirm") ]
+                @ Option.value_map pacman_conf ~default:[] ~f:(fun c -> [ "--config"; c ])
+              in
+              run_exn auth ("oaur" :: "build-sync" :: sync_args)
           end))
+
+let sync ~db_names ?pacman_conf ~noconfirm ~sysupgrade () =
+  let get_local_config conf_args db_names =
+    let global_options = run_capture "pacconf" @@ conf_args @ [ "--options"; "--raw" ] in
+    let repo_options =
+      List.map db_names ~f:(fun repo ->
+          Printf.sprintf "[%s]\n%s" repo
+            (run_capture "pacconf" @@ conf_args @ [ "--repo"; repo; "--raw" ]))
+    in
+    String.concat ~sep:"\n" ("[options]" :: global_options :: repo_options)
+  in
+  let waitlock lockfile =
+    while file_exists lockfile do
+      let timer = ref 0 in
+      Printf.eprintf "%s: pacman is currently in use, please wait...\n" argv0;
+      while file_exists lockfile && !timer < 10 do
+        timer := !timer + 1;
+        Core_unix.sleep 3
+      done
+    done
+  in
+  let conf_args = Option.value_map pacman_conf ~default:[] ~f:(fun c -> [ "--config"; c ]) in
+  let lockfile = run_capture "packlock" (conf_args @ [ "--print" ]) in
+  waitlock lockfile;
+  run_exn "pacsync" (conf_args @ db_names);
+  waitlock lockfile;
+  run_exn "pacsync" (conf_args @ db_names @ [ "--dbext=.files" ]);
+  let sync_args =
+    args_from_boolean [ (sysupgrade, "--sysupgrade"); (noconfirm, "--noconfirm") ]
+  in
+  if not (List.is_empty db_names) then
+    let sync_args = sync_args @ [ "--resolve-replacements=none" ] in
+    let tmp = Filename_unix.temp_file "oaur" ".conf" in
+    Fun.protect
+      ~finally:(fun () -> Sys_unix.remove tmp)
+      (fun () ->
+        Out_channel.write_all tmp ~data:(get_local_config conf_args db_names);
+        waitlock lockfile;
+        run_exn "pactrans" @@ sync_args @ [ "--config"; tmp ])
+  else begin
+    waitlock lockfile;
+    run_exn "pactrans" @@ sync_args @ conf_args
+  end

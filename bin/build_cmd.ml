@@ -80,14 +80,44 @@ let command =
       and new_only =
         flag "--new" no_arg ~doc:"Only add packages that are not already in the database"
       and prevent_downgrade =
-        flag "--prevent-downgrade" no_arg ~doc:"Do not add packages with a lower version" in
+        flag "--prevent-downgrade" no_arg ~doc:"Do not add packages with a lower version"
+      and nosync =
+        flag "--nosync" no_arg ~doc:"Do not sync the local repository after building" in
       fun () ->
         match
           Aur.Build.main ~sign_package ?queuefile ?opt_db_ext:db_ext ?opt_db_name:db_name
             ?pacman_conf ?makepkg_conf ?root ~chroot ~status ?buildscript ?results_file
             ~results_append ~force ~run_pkgver ~ignorearch ~nocheck ~noconfirm ~rmdeps ~syncdeps
             ~bind_ro ~bind_rw ~namcap ~checkpkg ~temp ?user ~margs ~cargs
-            ~verify ~remove ~new_only ~prevent_downgrade ()
+            ~verify ~remove ~new_only ~prevent_downgrade ~nosync ()
+        with
+        | () -> ()
+        | exception (Aur.Errors.UsageError msg | Failure msg) ->
+            Printf.eprintf "%s\n" msg;
+            exit 1
+        | exception Aur.Errors.SubExn (cmd, code) ->
+            Printf.eprintf "%s: exited with error code %d\n" cmd code;
+            exit 1
+    ]
+
+let sync_command =
+  Command.basic ~summary:"Upgrade packages in a local repository"
+    [%map_open.Command
+      let db_names =
+        flag "-d" ~aliases:[ "--database" ] (listed string)
+          ~doc:"NAME Use NAME as the local repository (repeatable)"
+      and pacman_conf =
+        flag "--config" (optional string)
+          ~doc:"FILE pacman.conf file to use"
+      and noconfirm =
+        flag "-n" ~aliases:[ "--noconfirm" ] no_arg
+          ~doc:"Pass --noconfirm to pactrans"
+      and sysupgrade =
+        flag "-u" ~aliases:[ "--sysupgrade" ] no_arg
+          ~doc:"Upgrade installed packages" in
+      fun () ->
+        match
+          Aur.Build.sync ~db_names ?pacman_conf ~noconfirm ~sysupgrade ()
         with
         | () -> ()
         | exception (Aur.Errors.UsageError msg | Failure msg) ->
